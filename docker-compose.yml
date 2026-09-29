@@ -1,0 +1,111 @@
+name: sre-testbed
+
+x-python-healthcheck: &python-healthcheck
+  test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 5s
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  gateway:
+    build: ./services/gateway
+    environment:
+      AUTH_URL: http://auth:8000
+      ORDER_URL: http://order:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+    depends_on:
+      auth:
+        condition: service_healthy
+      order:
+        condition: service_healthy
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
+  auth:
+    build: ./services/auth
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-3600}
+      DEMO_USERS: ${DEMO_USERS:-alice:alice,bob:bob}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
+  order:
+    build: ./services/order
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}
+      PAYMENT_URL: http://payment:8000
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      payment:
+        condition: service_healthy
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
+  payment:
+    build: ./services/payment
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-orders}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  tests:
+    build: ./tests
+    profiles: [test]
+    environment:
+      BASE_URL: http://nginx
+    depends_on:
+      nginx:
+        condition: service_healthy
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  pgdata:
