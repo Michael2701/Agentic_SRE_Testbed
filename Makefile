@@ -1,8 +1,12 @@
 COMPOSE := docker compose
 RATE ?= 5
 DURATION ?= 60
+FAULTS_URL := http://localhost:$${FAULT_INJECTOR_PORT:-8090}
+PARAMS ?= {}
+PRETTY := python3 -m json.tool
+comma := ,
 
-.PHONY: up down test load logs ps
+.PHONY: up down test load fault faults recover logs ps
 
 up: ## Build and start the whole environment, wait until healthy
 	$(COMPOSE) up -d --build --wait
@@ -15,6 +19,17 @@ down: ## Stop the environment
 
 test: ## Run integration tests against the running environment
 	$(COMPOSE) --profile test run --rm --build tests
+
+fault: ## Inject a fault: make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' [TARGET=payment] [EXP=exp-1]
+	@test -n "$(TYPE)" || { echo "TYPE is required (payment-latency | payment-error | service-unavailable)"; exit 2; }
+	@curl -s -XPOST $(FAULTS_URL)/faults -H 'content-type: application/json' \
+		-d '{"type":"$(subst -,_,$(TYPE))","parameters":$(PARAMS)$(if $(TARGET),$(comma)"target":"$(TARGET)")$(if $(EXP),$(comma)"experiment_id":"$(EXP)")}' | $(PRETTY)
+
+faults: ## List active faults
+	@curl -s "$(FAULTS_URL)/faults?state=active" | $(PRETTY)
+
+recover: ## Remove all active faults
+	@curl -s -XDELETE $(FAULTS_URL)/faults | $(PRETTY)
 
 load: ## Generate steady traffic: make load RATE=5 DURATION=60
 	$(COMPOSE) --profile test run --rm --build tests python load.py --rate $(RATE) --duration $(DURATION)

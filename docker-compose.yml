@@ -112,6 +112,22 @@ services:
       retries: 10
     networks: [backend]
 
+  # --- Control plane (M4) — invisible to the diagnostic plane -----------------
+  # Not scraped by Prometheus, not traced, and its logs are dropped by Alloy.
+
+  fault-injector:
+    build: ./services/fault-injector
+    ports:
+      - "127.0.0.1:${FAULT_INJECTOR_PORT:-8090}:8000"
+    environment:
+      COMPOSE_PROJECT: sre-testbed
+      PAYMENT_URL: http://payment:8000
+    volumes:
+      - faultdata:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
   # --- Observability (M2) ---------------------------------------------------
 
   prometheus:
@@ -211,12 +227,15 @@ services:
       LOKI_URL: http://loki:3100
       GRAFANA_URL: http://grafana:3000
       TEMPO_URL: http://tempo:3200
+      FAULT_INJECTOR_URL: http://fault-injector:8000
     depends_on:
       nginx:
         condition: service_healthy
       prometheus:
         condition: service_healthy
       grafana:
+        condition: service_healthy
+      fault-injector:
         condition: service_healthy
     networks: [backend]
 
@@ -225,3 +244,4 @@ networks:
 
 volumes:
   pgdata:
+  faultdata:

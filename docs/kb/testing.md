@@ -2,9 +2,19 @@
 
 - `make test` = `docker compose --profile test run --rm --build tests`. Tests run **in a container**
   against `BASE_URL=http://nginx`, which exercises the real public path; the host needs no Python deps.
-- `tests/integration/conftest.py`: a session `client` fixture waits for `/ready` (`READY_TIMEOUT_SECONDS`,
-  default 60); the `token` fixture logs in as alice. Tests import `DEMO_USER` from `conftest`.
-- `test_happy_path.py` (6 tests): health/ready, login ok/bad, create order → read it back, orders
+- **`tests/conftest.py` (shared by `integration/` and `faults/`)**: a session `client` fixture waits for
+  `/ready` (`READY_TIMEOUT_SECONDS`, default 60), and the `token` fixture logs in as alice. It also holds
+  URLs, `DEMO_USER`, `ORDER`, `eventually()`, `metric_value()`, `loki_streams()`. Import them with
+  `from conftest import ...`. Keep a single conftest: two `conftest.py` files would clash on that import.
+- Order: `pytest integration faults` (tests/Dockerfile CMD). Fault tests run last because they mutate state.
+- `tests/faults/test_faults.py` (18 tests, ~30s): API lifecycle/validation/409/delete-all; incidents
+  for latency (elapsed ≥1.5s + order dependency histogram), error (502 + `orders_total{payment_failed}`
+  + warning/error logs in Loki for the request_id), and unavailable for payment/auth/order (502,
+  health unreachable, recovery); reconcile re-push; control-plane isolation. The autouse
+  `recover_after` fixture runs `DELETE /faults` and waits until payment `/health` and gateway `/ready` are OK.
+- Not automated (the tests container has no docker socket): fault persistence across an injector
+  restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active).
+- `integration/test_happy_path.py` (6 tests): health/ready, login ok/bad, create order → read it back, orders
   without a token or with an invalid token → 401.
 - `test_observability.py` (10 tests): request ID generated/preserved, `/metrics` per service
   (hits `http://<svc>:8000` directly), counter deltas, Prometheus targets == expected job set and all
