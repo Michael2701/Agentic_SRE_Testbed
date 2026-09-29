@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from observability import instrument
+from observability import annotate_span, instrument
 from observability.http import instrumented_client
 
 from app.config import settings
@@ -62,7 +62,9 @@ async def authenticate(authorization: str | None) -> str:
         raise HTTPException(status_code=401, detail="invalid or expired token")
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"auth returned {response.status_code}")
-    return response.json()["user_id"]
+    user_id = response.json()["user_id"]
+    annotate_span({"user.id": user_id})
+    return user_id
 
 
 @app.post("/login")

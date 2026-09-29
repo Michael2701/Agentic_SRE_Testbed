@@ -7,9 +7,12 @@ x-python-healthcheck: &python-healthcheck
   retries: 10
   start_period: 5s
 
+x-otel-env: &otel-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
+
 services:
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine-otel
     ports:
       - "${NGINX_PORT:-8080}:80"
     volumes:
@@ -17,6 +20,8 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+      tempo:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
       interval: 5s
@@ -29,6 +34,7 @@ services:
       context: .
       dockerfile: services/gateway/Dockerfile
     environment:
+      <<: *otel-env
       AUTH_URL: http://auth:8000
       ORDER_URL: http://order:8000
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
@@ -45,6 +51,7 @@ services:
       context: .
       dockerfile: services/auth/Dockerfile
     environment:
+      <<: *otel-env
       REDIS_URL: redis://redis:6379/0
       TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-3600}
       DEMO_USERS: ${DEMO_USERS:-alice:alice,bob:bob}
@@ -59,6 +66,7 @@ services:
       context: .
       dockerfile: services/order/Dockerfile
     environment:
+      <<: *otel-env
       DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}
       PAYMENT_URL: http://payment:8000
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
@@ -74,6 +82,8 @@ services:
     build:
       context: .
       dockerfile: services/payment/Dockerfile
+    environment:
+      <<: *otel-env
     healthcheck: *python-healthcheck
     networks: [backend]
 
@@ -109,6 +119,7 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
+      - --web.enable-remote-write-receiver   # Tempo metrics-generator (service graph, span metrics)
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
@@ -125,6 +136,13 @@ services:
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./loki/config.yml:/etc/loki/config.yml:ro
+    networks: [backend]
+
+  tempo:
+    image: grafana/tempo:2.8.2
+    command: ["-config.file=/etc/tempo/config.yml"]
+    volumes:
+      - ./tempo/config.yml:/etc/tempo/config.yml:ro
     networks: [backend]
 
   alloy:
@@ -150,7 +168,7 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
-    depends_on: [prometheus, loki]
+    depends_on: [prometheus, loki, tempo]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
       interval: 5s
@@ -192,6 +210,7 @@ services:
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://loki:3100
       GRAFANA_URL: http://grafana:3000
+      TEMPO_URL: http://tempo:3200
     depends_on:
       nginx:
         condition: service_healthy

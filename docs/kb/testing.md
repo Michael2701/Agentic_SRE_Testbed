@@ -11,8 +11,14 @@
   up, one request_id in Loki for nginx+gateway+auth+order+payment, Grafana datasources healthy and 3
   dashboards provisioned. Uses the `eventually()` helper, because telemetry is asynchronous (up to 45s).
   When adding a scrape job, update `EXPECTED_JOBS`.
-- Tests env: `PROMETHEUS_URL`, `LOKI_URL`, `GRAFANA_URL` (in-network); the tests service waits for
-  nginx, prometheus and grafana to be healthy.
+- `test_tracing.py` (6 tests): the module fixture `order_trace` places an order, reads `X-Trace-ID` and
+  polls Tempo until spans from all 5 services exist. It checks a single nginx root, the parent chain
+  (gateway←nginx, auth/order←gateway, payment←order), redis/postgresql spans, business attributes,
+  trace_id in Loki for all services, and that Grafana reaches Tempo and the `sre-traces` dashboard exists.
+- Shared helpers live in `conftest.py`: URLs (`PROMETHEUS_URL`, `LOKI_URL`, `GRAFANA_URL`, `TEMPO_URL`),
+  `DEMO_USER`, `ORDER`, `eventually()`. Import them with `from conftest import ...`. Module-scoped
+  fixtures must not depend on the function-scoped `token`.
+- Tests env: the in-network URLs above; the tests service waits for nginx, prometheus and grafana to be healthy.
 - `test_business_counters_increase` asserts an exact +1, so don't run `make load` concurrently with `make test`.
 - Manual:
   ```bash

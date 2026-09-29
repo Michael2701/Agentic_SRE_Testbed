@@ -1,27 +1,12 @@
-import os
-import time
 import uuid
 
 import httpx
 import pytest
 
-PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
-LOKI_URL = os.environ.get("LOKI_URL", "http://localhost:3100")
-GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://localhost:3000")
+from conftest import GRAFANA_URL, LOKI_URL, ORDER, PROMETHEUS_URL, eventually
 
 APP_SERVICES = ["gateway", "auth", "order", "payment"]
 EXPECTED_JOBS = {*APP_SERVICES, "nginx", "postgres", "redis", "prometheus"}
-ORDER = {"item": "book", "quantity": 1, "amount_cents": 1500}
-
-
-def eventually(check, timeout=45, interval=1):
-    """Retries `check` until it returns a truthy value; telemetry pipelines are asynchronous."""
-    deadline = time.monotonic() + timeout
-    while True:
-        result = check()
-        if result or time.monotonic() > deadline:
-            return result
-        time.sleep(interval)
 
 
 def metric_value(text: str, name: str, **labels) -> float:

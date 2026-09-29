@@ -5,12 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "observability"
 version = "0.1.0"
-description = "Shared telemetry for testbed services: JSON logs, request IDs, Prometheus metrics"
+description = "Shared telemetry for testbed services: JSON logs, request IDs, Prometheus metrics, OTel traces"
 requires-python = ">=3.12"
-dependencies = ["prometheus-client==0.21.1"]
+dependencies = [
+    "prometheus-client==0.21.1",
+    "opentelemetry-sdk==1.45.0",
+    "opentelemetry-exporter-otlp-proto-http==1.45.0",
+    "opentelemetry-instrumentation-fastapi==0.66b0",
+]
 
 [project.optional-dependencies]
-http = ["httpx==0.28.1"]
+http = ["httpx==0.28.1", "opentelemetry-instrumentation-httpx==0.66b0"]
+postgres = ["opentelemetry-instrumentation-asyncpg==0.66b0"]
+redis = ["opentelemetry-instrumentation-redis==0.66b0"]
 
 [tool.setuptools]
 packages = ["observability"]
