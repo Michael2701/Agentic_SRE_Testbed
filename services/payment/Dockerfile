@@ -9,8 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv
 
 COPY libs/observability /libs/observability
+COPY libs/faultpoint /libs/faultpoint
 COPY services/payment/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "/libs/observability"
+RUN pip install --no-cache-dir -r requirements.txt /libs/faultpoint "/libs/observability"
 
 COPY services/payment/app ./app
 

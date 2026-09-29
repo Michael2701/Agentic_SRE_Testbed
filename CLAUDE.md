@@ -22,8 +22,9 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 1 | Working distributed application | ✅ done (`7921305`) | — |
 | 2 | Observability | ✅ done (`f0fda81`) | [observability.md](docs/kb/observability.md) |
 | 3 | Distributed tracing (OpenTelemetry) | ✅ done (main `b23927e`) | [tracing.md](docs/kb/tracing.md) |
-| 4 | Fault injection foundation | ✅ implemented on `feature/m4-fault-injection`, awaiting PRs → develop → main | [faults.md](docs/kb/faults.md) |
-| 5–9 | Advanced faults → stabilization | not started | `project.md` |
+| 4 | Fault injection foundation | ✅ done (main `9468b10`) | [faults.md](docs/kb/faults.md) |
+| 5 | Advanced faults | ✅ implemented on `feature/m5-advanced-faults`, awaiting PRs → develop → main | [faults.md](docs/kb/faults.md) |
+| 6–9 | Infrastructure faults → stabilization | not started | `project.md` |
 
 ## Topics
 
@@ -33,7 +34,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | [conventions.md](docs/kb/conventions.md) | writing or changing any service code (structure, config, clients, health, errors, deps) |
 | [observability.md](docs/kb/observability.md) | logs, request IDs, metrics, `libs/observability`, Prometheus/Loki/Alloy/Grafana, dashboards, `make load` |
 | [tracing.md](docs/kb/tracing.md) | traces, Tempo, nginx otel module, span attributes, log↔trace links, service map |
-| [faults.md](docs/kb/faults.md) | fault injector, fault types, **control-plane isolation rule**, adding faults, `make fault/recover` |
+| [faults.md](docs/kb/faults.md) | fault injector, all fault types + mechanisms, **control-plane isolation rule**, symptom→cause table, faultpoint, adding faults |
 | [auth.md](docs/kb/auth.md) | login, tokens, Redis, gateway auth validation |
 | [orders.md](docs/kb/orders.md) | order flow, payment simulator, PostgreSQL schema |
 | [testing.md](docs/kb/testing.md) | running/writing tests, manual checks, DB/Redis inspection |

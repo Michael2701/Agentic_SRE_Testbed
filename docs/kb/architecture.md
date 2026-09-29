@@ -11,12 +11,17 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
 - App service images are built with **context = repo root** (`build: {context: ., dockerfile:
   services/<svc>/Dockerfile}`) so `libs/observability` can be copied in. Root `.dockerignore` excludes
   .git, docs, tests.
+- App services have limits `cpus: 0.5`, `mem_limit: 256m` (anchor `x-app-limits`, M5). The baseline
+  p95 moved slightly, since CFS throttling adds jitter.
+- Postgres runs with `max_connections=40`. The **`db-migrate`** one-shot service (postgres image, psql)
+  applies `db/migrations/*.sql` idempotently on every `make up`; `order` waits for
+  `service_completed_successfully`. `make up --wait` is fine with a completed one-shot service.
 - App services listen on `:8000`. Images: `nginx:1.27-alpine`, `postgres:16-alpine`, `redis:7-alpine`,
   app services `python:3.12-slim`.
 - Every container has a healthcheck; `depends_on: condition: service_healthy` follows the dependency graph.
   Python healthchecks use a shared YAML anchor `x-python-healthcheck` (urllib → `/health`).
 - `make up` = `docker compose up -d --build --wait` (ready in ~20s).
-- Volume `pgdata`; `db/init.sql` is mounted into `/docker-entrypoint-initdb.d`.
+- Volume `pgdata`. The schema is no longer in initdb (see db-migrate above).
 - `tests` service is behind compose profile `test` and does not start on `make up`.
 - nginx: `/nginx-health` is answered by nginx itself; everything else is proxied to `gateway:8000`
   (connect 5s, read 30s). The upstream uses `resolver 127.0.0.11 valid=5s` + `server gateway:8000 resolve`

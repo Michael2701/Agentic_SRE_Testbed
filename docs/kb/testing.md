@@ -4,7 +4,10 @@
   against `BASE_URL=http://nginx`, which exercises the real public path; the host needs no Python deps.
 - **`tests/conftest.py` (shared by `integration/` and `faults/`)**: a session `client` fixture waits for
   `/ready` (`READY_TIMEOUT_SECONDS`, default 60), and the `token` fixture logs in as alice. It also holds
-  URLs, `DEMO_USER`, `ORDER`, `eventually()`, `metric_value()`, `loki_streams()`. Import them with
+  URLs, `DEMO_USER`, `ORDER`, `eventually()`, `metric_value()` (labelled *and* unlabelled samples),
+  `loki_streams()`, the `*_METRICS` URLs and the fault helpers `faults` (session injector client),
+  `recover_after`, `inject()`, `place_order()`. Fault modules opt in with
+  `pytestmark = pytest.mark.usefixtures("recover_after")`. Import them with
   `from conftest import ...`. Keep a single conftest: two `conftest.py` files would clash on that import.
 - Order: `pytest integration faults` (tests/Dockerfile CMD). Fault tests run last because they mutate state.
 - `tests/faults/test_faults.py` (18 tests, ~30s): API lifecycle/validation/409/delete-all; incidents
@@ -12,6 +15,14 @@
   + warning/error logs in Loki for the request_id), and unavailable for payment/auth/order (502,
   health unreachable, recovery); reconcile re-push; control-plane isolation. The autouse
   `recover_after` fixture runs `DELETE /faults` and waits until payment `/health` and gateway `/ready` are OK.
+- `tests/faults/test_advanced_faults.py` (24 tests, ~2 min), the M5 DoD:
+  - `test_slow_orders_symptom[5 causes]`: all 201, median ≥ max(2×baseline, +30 ms), recovery;
+  - `test_failing_orders_symptom[5 causes]`: 5xx ratio in range (intermittent 0.1–0.9), recovery;
+  - per-cause evidence tests (throttling, memory, sharelock, reporting connections, redis latency,
+    timeout outcome);
+  - validation, container-state conflict, no mechanism names in Loki.
+  - `sample()` spaces requests 250 ms apart because periodic faults need it.
+- `make test-faults` runs only `faults/`.
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active).
 - `integration/test_happy_path.py` (6 tests): health/ready, login ok/bad, create order → read it back, orders

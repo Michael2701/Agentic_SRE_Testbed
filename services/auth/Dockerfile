@@ -9,8 +9,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /srv
 
 COPY libs/observability /libs/observability
+COPY libs/faultpoint /libs/faultpoint
 COPY services/auth/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "/libs/observability[redis]"
+RUN pip install --no-cache-dir -r requirements.txt /libs/faultpoint "/libs/observability[redis]"
 
 COPY services/auth/app ./app
 
