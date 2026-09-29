@@ -3,8 +3,9 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 3 — distributed tracing** (OpenTelemetry → Tempo), on top of M2 observability
-(JSON logs, request IDs, Prometheus, Loki, Grafana). No fault injection yet.
+**Current state: Milestone 4 — fault injection foundation.** A dedicated Fault Injector can break the system
+in controlled, reversible ways. Built on M3 tracing (OpenTelemetry → Tempo) and M2 observability (JSON
+logs, request IDs, Prometheus, Loki, Grafana).
 
 ## Architecture
 
@@ -54,6 +55,9 @@ Everything else lives on the internal `backend` network.
 make up     # build and start everything, waits until all containers are healthy
 make test   # run integration tests (in a container, through nginx)
 make load   # steady traffic, e.g. make load RATE=10 DURATION=120
+make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}'   # inject a fault
+make faults     # list active faults
+make recover    # remove all faults
 make ps     # container status
 make logs   # follow logs
 make down   # stop the environment
@@ -137,6 +141,41 @@ curl -si -XPOST localhost:8080/orders -H "Authorization: Bearer $TOKEN" \
 
 Then open Grafana → Explore → Tempo and paste the trace ID, or use the *Traces* dashboard.
 
+## Fault injection
+
+`fault-injector` is the **control plane**. It knows what was broken; the telemetry stack must not. It has
+no metrics or traces, and its logs are not shipped to Loki. Services' internal fault hooks (`/__*`) are
+excluded from logs, metrics and traces, so diagnosis sees only symptoms.
+
+API (`http://localhost:8090`, bound to localhost only):
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/faults` | `{type, target?, parameters?, experiment_id?}` → 201 (409 duplicate, 422 invalid) |
+| GET | `/faults` | all faults, `?state=active\|removed\|failed` |
+| GET | `/faults/{id}` | one fault |
+| DELETE | `/faults/{id}` | remove (revert) one fault; it stays in history as `removed` |
+| DELETE | `/faults` | remove all active faults |
+
+Each fault has `id`, `experiment_id`, `type`, `target`, `parameters`, `created_at`/`updated_at` and `state`.
+
+| Type | Target | Parameters | Mechanism | Symptom |
+|---|---|---|---|---|
+| `payment_latency` | payment | `latency_ms`, `jitter_ms`, `probability` | payment delays responses | `POST /orders` p95 ≈ latency |
+| `payment_error` | payment | `status_code` (5xx), `probability` | payment returns 5xx | 502s, `payment_failed` orders |
+| `service_unavailable` | payment, auth, order | — | container is stopped (Docker API) | 502s, connection errors |
+
+Faults are persisted (SQLite) and re-applied every 2s, so they survive restarts of the injector or the
+target. Removing a fault reverts it; for `service_unavailable` the container is started and the injector
+waits until it is healthy.
+
+```bash
+make load RATE=5 DURATION=180 &
+make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' EXP=exp-1
+# watch Grafana: Service Overview p95, Traces (slow order → payment)
+make recover
+```
+
 ## API
 
 Public (via nginx, `http://localhost:8080`):
@@ -181,6 +220,11 @@ Tests run inside the compose network:
     spans, and business attributes;
   - its trace ID appears in the logs of every service;
   - Grafana reaches Tempo.
+- `tests/faults/test_faults.py` runs after the integration tests and recovers after each test. It covers:
+  - the fault API (lifecycle, validation, conflicts, delete-all);
+  - the incident and the recovery for each fault type (service_unavailable for payment, auth and order);
+  - the reconcile loop re-applying a lost fault;
+  - that the control plane leaves no trace in Loki, Prometheus or Tempo.
 
 ## Repository layout
 
@@ -189,9 +233,11 @@ nginx/nginx.conf          reverse proxy config (JSON access log, request IDs, st
 db/init.sql               PostgreSQL schema
 libs/observability/       shared telemetry package: JSON logging, request-ID middleware, metrics, httpx transport
 services/<name>/          one FastAPI service per directory (Dockerfile, requirements.txt, app/)
+services/fault-injector/  control plane: fault API, SQLite store, Docker API client, reconcile loop
 prometheus/ loki/ alloy/  observability stack configs
 tempo/                    trace backend config
 grafana/                  provisioning, dashboards/*.json and generate_dashboards.py (their source)
 tests/integration/        pytest integration suite (runs via `make test`)
+tests/faults/             fault injection tests (run after integration)
 tests/load.py             traffic generator (runs via `make load`)
 ```

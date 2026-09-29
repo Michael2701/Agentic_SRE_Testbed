@@ -22,3 +22,11 @@ Newest last. Format: milestone: decision (reason).
 - M3: 100% sampling (testbed, low volume; every experiment request must be traceable).
 - M3: request_id kept alongside trace_id (request_id works without tracing, e.g. when Tempo itself is faulted).
 - M3: dashboards generated from `grafana/generate_dashboards.py`, now committed (source of truth).
+- M4: control plane invisible to the diagnostic plane from day one (no injector telemetry; `/__*` excluded;
+  Alloy drops injector logs). This prepares the M7 CONTROL ≠ DIAGNOSTIC split.
+- M4: service_unavailable = real `docker stop` via the Docker API (honest connection-refused), not an app flag.
+- M4: payment latency/error = app-level hook, because the simulator *is* the dependency. The hook stays
+  payment-only until M5 needs a second one.
+- M4: SQLite for fault state (not the app Redis, which is a future fault target; survives injector restarts).
+- M4: desired-state reconcile loop (2s) instead of one-shot apply (faults survive target restarts).
+- M4: Docker API via httpx over the unix socket (no docker SDK dependency).
