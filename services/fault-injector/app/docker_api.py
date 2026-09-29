@@ -33,28 +33,60 @@ class Docker:
         inspect.raise_for_status()
         return inspect.json()
 
-    async def is_running(self, service: str) -> bool:
-        return (await self.container(service))["State"]["Running"]
+    async def _post(self, path: str, what: str, **kwargs) -> httpx.Response:
+        response = await self._client.post(path, **kwargs)
+        if response.status_code not in (200, 201, 204, 304):
+            raise DockerError(f"{what}: HTTP {response.status_code} {response.text}")
+        return response
+
+    async def is_available(self, service: str) -> bool:
+        """Running and not paused, i.e. it can answer requests."""
+        state = (await self.container(service))["State"]
+        return state["Running"] and not state["Paused"]
 
     async def stop(self, service: str) -> None:
         container = await self.container(service)
         if container["State"]["Running"]:
-            response = await self._client.post(f"/containers/{container['Id']}/stop", params={"t": "2"})
-            if response.status_code not in (204, 304):
-                raise DockerError(f"stop {service}: HTTP {response.status_code} {response.text}")
+            await self._post(f"/containers/{container['Id']}/stop", f"stop {service}", params={"t": "2"})
 
-    async def start_and_wait_healthy(self, service: str, timeout: float) -> None:
+    async def pause(self, service: str) -> None:
         container = await self.container(service)
         if not container["State"]["Running"]:
-            response = await self._client.post(f"/containers/{container['Id']}/start")
-            if response.status_code not in (204, 304):
-                raise DockerError(f"start {service}: HTTP {response.status_code} {response.text}")
+            raise DockerError(f"cannot pause {service}: not running")
+        if not container["State"]["Paused"]:
+            await self._post(f"/containers/{container['Id']}/pause", f"pause {service}")
+
+    async def resume_and_wait_healthy(self, service: str, timeout: float) -> None:
+        """Unpauses or starts the container, then waits for its healthcheck."""
+        container = await self.container(service)
+        if container["State"]["Paused"]:
+            await self._post(f"/containers/{container['Id']}/unpause", f"unpause {service}")
+        elif not container["State"]["Running"]:
+            await self._post(f"/containers/{container['Id']}/start", f"start {service}")
         deadline = time.monotonic() + timeout
         while True:
             state = (await self.container(service))["State"]
             health = state.get("Health", {}).get("Status")
-            if state["Running"] and health in (None, "healthy"):
+            if state["Running"] and not state["Paused"] and health in (None, "healthy"):
                 return
             if time.monotonic() > deadline:
                 raise DockerError(f"{service} not healthy after {timeout}s (health={health})")
             await asyncio.sleep(1)
+
+    async def exec(self, service: str, cmd: list[str], wait: bool = True, timeout: float = 15) -> int | None:
+        """Runs `cmd` inside the container; returns its exit code (None when not waiting)."""
+        container = await self.container(service)
+        created = await self._post(f"/containers/{container['Id']}/exec", f"exec in {service}",
+                                   json={"Cmd": cmd, "AttachStdout": False, "AttachStderr": False})
+        exec_id = created.json()["Id"]
+        await self._post(f"/exec/{exec_id}/start", f"exec start in {service}", json={"Detach": True})
+        if not wait:
+            return None
+        deadline = time.monotonic() + timeout
+        while True:
+            info = (await self._client.get(f"/exec/{exec_id}/json")).json()
+            if not info["Running"]:
+                return info["ExitCode"]
+            if time.monotonic() > deadline:
+                raise DockerError(f"exec in {service} did not finish in {timeout}s")
+            await asyncio.sleep(0.2)

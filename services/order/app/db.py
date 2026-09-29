@@ -9,7 +9,9 @@ ORDER_COLUMNS = (
 
 
 async def create_pool(dsn: str, min_size: int, max_size: int) -> asyncpg.Pool:
-    return await asyncpg.create_pool(dsn=dsn, min_size=min_size, max_size=max_size)
+    return await asyncpg.create_pool(
+        dsn=dsn, min_size=min_size, max_size=max_size, server_settings={"application_name": "order"}
+    )
 
 
 async def insert_pending_order(

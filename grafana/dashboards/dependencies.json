@@ -339,8 +339,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Connections (orders DB)",
-      "description": "",
+      "title": "Connections by user and state (orders DB)",
+      "description": "Connections per role and state vs the slots available to non-superusers.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -357,9 +357,18 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(pg_stat_database_numbackends{datname=\"orders\"})",
+          "expr": "sum by (usename, state) (pg_stat_activity_count{datname=\"orders\"}) > 0",
           "refId": "A",
-          "legendFormat": "backends"
+          "legendFormat": "{{usename}} {{state}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(pg_settings_max_connections) - max(pg_settings_superuser_reserved_connections)",
+          "refId": "B",
+          "legendFormat": "non-superuser limit"
         }
       ],
       "fieldConfig": {
@@ -453,19 +462,125 @@
     },
     {
       "id": 10,
+      "type": "timeseries",
+      "title": "Locks by mode (orders DB)",
+      "description": "Held/awaited locks per mode (e.g. ShareLock, RowExclusiveLock).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (mode) (pg_locks_count{datname=\"orders\"}) > 0",
+          "refId": "A",
+          "legendFormat": "{{mode}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Waiting on locks (orders DB)",
+      "description": "Active backends; a rise with flat throughput suggests sessions waiting on locks.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(pg_stat_activity_count{datname=\"orders\", state=\"active\"})",
+          "refId": "A",
+          "legendFormat": "active backends"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
       "type": "row",
       "title": "Redis",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 34,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 11,
+      "id": 13,
       "type": "stat",
       "title": "Redis up",
       "description": "",
@@ -475,7 +590,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 27,
+        "y": 35,
         "w": 4,
         "h": 4
       },
@@ -521,7 +636,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 14,
       "type": "timeseries",
       "title": "Commands / s",
       "description": "",
@@ -531,7 +646,7 @@
       },
       "gridPos": {
         "x": 4,
-        "y": 27,
+        "y": 35,
         "w": 7,
         "h": 8
       },
@@ -574,7 +689,7 @@
       }
     },
     {
-      "id": 13,
+      "id": 15,
       "type": "timeseries",
       "title": "Connected clients",
       "description": "",
@@ -584,7 +699,7 @@
       },
       "gridPos": {
         "x": 11,
-        "y": 27,
+        "y": 35,
         "w": 6,
         "h": 8
       },
@@ -627,7 +742,7 @@
       }
     },
     {
-      "id": 14,
+      "id": 16,
       "type": "timeseries",
       "title": "Memory used",
       "description": "",
@@ -637,7 +752,7 @@
       },
       "gridPos": {
         "x": 17,
-        "y": 27,
+        "y": 35,
         "w": 7,
         "h": 8
       },

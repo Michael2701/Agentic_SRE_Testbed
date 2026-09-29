@@ -10,6 +10,12 @@ x-python-healthcheck: &python-healthcheck
 x-otel-env: &otel-env
   OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318
 
+# Production-like resource limits for app services. They also make CPU saturation and memory pressure
+# faults meaningful (without a quota, a burner on a many-core host changes nothing).
+x-app-limits: &app-limits
+  cpus: 0.5
+  mem_limit: 256m
+
 services:
   nginx:
     image: nginx:1.27-alpine-otel
@@ -33,6 +39,7 @@ services:
     build:
       context: .
       dockerfile: services/gateway/Dockerfile
+    <<: *app-limits
     environment:
       <<: *otel-env
       AUTH_URL: http://auth:8000
@@ -50,6 +57,7 @@ services:
     build:
       context: .
       dockerfile: services/auth/Dockerfile
+    <<: *app-limits
     environment:
       <<: *otel-env
       REDIS_URL: redis://redis:6379/0
@@ -65,14 +73,15 @@ services:
     build:
       context: .
       dockerfile: services/order/Dockerfile
+    <<: *app-limits
     environment:
       <<: *otel-env
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}
+      DATABASE_URL: postgresql://order_svc:order_svc@postgres:5432/${POSTGRES_DB:-orders}
       PAYMENT_URL: http://payment:8000
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
       payment:
         condition: service_healthy
     healthcheck: *python-healthcheck
@@ -82,6 +91,7 @@ services:
     build:
       context: .
       dockerfile: services/payment/Dockerfile
+    <<: *app-limits
     environment:
       <<: *otel-env
     healthcheck: *python-healthcheck
@@ -89,18 +99,36 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    # Small enough that connection exhaustion is practical; 3 slots stay reserved for superusers.
+    command: ["postgres", "-c", "max_connections=40"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: ${POSTGRES_DB:-orders}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
+    networks: [backend]
+
+  # One-shot, idempotent migrations (schema + roles) on every `make up`, also on an existing volume.
+  db-migrate:
+    image: postgres:16-alpine
+    command: ["sh", "-c", "for f in /migrations/*.sql; do psql -v ON_ERROR_STOP=1 -q -f $$f || exit 1; done"]
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-app}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-app}
+      PGDATABASE: ${POSTGRES_DB:-orders}
+    volumes:
+      - ./db/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
     networks: [backend]
 
   redis:
@@ -121,7 +149,9 @@ services:
       - "127.0.0.1:${FAULT_INJECTOR_PORT:-8090}:8000"
     environment:
       COMPOSE_PROJECT: sre-testbed
-      PAYMENT_URL: http://payment:8000
+      ADMIN_DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}
+      REPORTING_DATABASE_URL: postgresql://reporting:reporting@postgres:5432/${POSTGRES_DB:-orders}
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - faultdata:/data
       - /var/run/docker.sock:/var/run/docker.sock

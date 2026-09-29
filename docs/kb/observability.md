@@ -40,10 +40,15 @@
   `sre-logs`, folder "SRE Testbed". The home dashboard is Service Overview.
 - Exporters: nginx-exporter (→ `nginx:8081/stub_status`, internal server block), postgres-exporter,
   redis-exporter.
-- **cAdvisor was removed.** It can't map cgroups to containers on Docker Desktop with the containerd
-  image store ("failed to identify the read-write layer ID"). Process CPU/RSS comes from
-  `process_*` metrics of the Python services. **Revisit for M5** (CPU/memory faults need
-  container-level metrics; options: `--docker_only=false` + id→name mapping, or a different exporter).
+- **cAdvisor was removed** (it can't map cgroups on Docker Desktop's containerd store). **Since M5,
+  container metrics come from `libs/observability/cgroup.py`:** each app service reads its own cgroup v2
+  files, covering all processes in the container (including fault hogs):
+  - `container_cpu_usage_seconds_total`, `container_cpu_throttled_seconds_total`,
+    `container_cpu_throttled_periods_total`, `container_cpu_limit_cores`;
+  - `container_memory_usage_bytes`, `container_memory_limit_bytes`, `container_oom_kills_total`;
+  - PSI `container_{cpu,memory}_pressure_stalled_seconds_total`.
+
+  These metrics are unlabelled; the service is the `job` label. Postgres/Redis still rely on their exporters.
 
 ## Dashboards
 - **Source of truth: `grafana/generate_dashboards.py`** (stdlib only). Edit it, run

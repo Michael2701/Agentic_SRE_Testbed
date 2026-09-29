@@ -10,51 +10,11 @@ import httpx
 import pytest
 
 from conftest import (
-    FAULT_INJECTOR_URL, ORDER, PROMETHEUS_URL, TEMPO_URL, eventually, loki_streams, metric_value,
+    ORDER_METRICS, PAYMENT_METRICS, PROMETHEUS_URL, TEMPO_URL, eventually, inject, loki_streams, metric_value,
+    place_order,
 )
 
-PAYMENT_METRICS = "http://payment:8000/metrics"
-ORDER_METRICS = "http://order:8000/metrics"
-
-
-@pytest.fixture(scope="module")
-def faults():
-    with httpx.Client(base_url=FAULT_INJECTOR_URL, timeout=90) as client:
-        yield client
-
-
-@pytest.fixture(autouse=True)
-def recover_after(faults, client):
-    yield
-    response = faults.delete("/faults")
-    assert response.status_code == 200, response.text
-
-    def healthy():
-        try:
-            payment_ok = httpx.get("http://payment:8000/health", timeout=2).status_code == 200
-            return payment_ok and client.get("/ready").status_code == 200
-        except httpx.HTTPError:
-            return False
-
-    assert eventually(healthy, timeout=60), "system did not recover after removing faults"
-
-
-def inject(faults, type_: str, target: str | None = None, **parameters) -> dict:
-    body = {"type": type_, "parameters": parameters, "experiment_id": "test-faults"}
-    if target:
-        body["target"] = target
-    response = faults.post("/faults", json=body)
-    assert response.status_code == 201, response.text
-    return response.json()
-
-
-def place_order(client, token, request_id: str | None = None) -> tuple[httpx.Response, float]:
-    headers = {"Authorization": f"Bearer {token}"}
-    if request_id:
-        headers["X-Request-ID"] = request_id
-    start = time.monotonic()
-    response = client.post("/orders", json=ORDER, headers=headers, timeout=30)
-    return response, time.monotonic() - start
+pytestmark = pytest.mark.usefixtures("recover_after")
 
 
 # ---------------------------------------------------------------- API

@@ -30,3 +30,13 @@ Newest last. Format: milestone: decision (reason).
 - M4: SQLite for fault state (not the app Redis, which is a future fault target; survives injector restarts).
 - M4: desired-state reconcile loop (2s) instead of one-shot apply (faults survive target restarts).
 - M4: Docker API via httpx over the unix socket (no docker SDK dependency).
+- M5: real mechanisms everywhere except the app-level faultpoint: exec'd hogs under real cgroup limits,
+  a PG trigger with pg_sleep, real held connections and table locks, Redis CLIENT PAUSE, docker pause.
+- M5: `libs/faultpoint` is a separate lib from `libs/observability` (control plane ≠ telemetry).
+- M5: container metrics from each service's own cgroup files instead of cAdvisor (works on Docker Desktop).
+- M5: app resource limits (0.5 CPU / 256 MiB); without quotas, CPU/memory faults are meaningless.
+- M5: the app DB role is a non-superuser + `max_connections=40`, so exhaustion is deterministic while
+  superuser slots stay usable.
+- M5: schema/roles via idempotent migrations (db-migrate service) instead of initdb (works on existing volumes).
+- M5: `redis_latency` via CLIENT PAUSE, because DEBUG SLEEP is disabled in Redis 7 (`enable-debug-command no`).
+  Network-level latency (tc/netem) is left for M6.

@@ -3,6 +3,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+import faultpoint
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="order", lifespan=lifespan)
+faultpoint.install(app)  # before instrument(): see faultpoint docstring
 instrument(app, "order")
 
 
