@@ -1,23 +1,29 @@
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from observability import instrument
+from observability.http import instrumented_client
 
 from app.config import settings
+
+logger = logging.getLogger("gateway")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.auth = httpx.AsyncClient(base_url=settings.auth_url, timeout=settings.http_timeout_seconds)
-    app.state.order = httpx.AsyncClient(base_url=settings.order_url, timeout=settings.http_timeout_seconds)
+    app.state.auth = instrumented_client(settings.auth_url, "auth", settings.http_timeout_seconds)
+    app.state.order = instrumented_client(settings.order_url, "order", settings.http_timeout_seconds)
     yield
     await app.state.auth.aclose()
     await app.state.order.aclose()
 
 
 app = FastAPI(title="gateway", lifespan=lifespan)
+instrument(app, "gateway")
 
 
 async def call(client: httpx.AsyncClient, name: str, method: str, path: str, **kwargs) -> httpx.Response:
@@ -52,6 +58,7 @@ async def authenticate(authorization: str | None) -> str:
         app.state.auth, "auth", "POST", "/validate", headers={"Authorization": authorization}
     )
     if response.status_code == 401:
+        logger.info("auth_rejected")
         raise HTTPException(status_code=401, detail="invalid or expired token")
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"auth returned {response.status_code}")

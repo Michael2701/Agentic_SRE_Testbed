@@ -1,3 +1,4 @@
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -5,10 +6,16 @@ from datetime import datetime
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
+from observability import instrument
+from observability.http import instrumented_client
+from prometheus_client import Counter
 from pydantic import BaseModel, Field
 
 from app import db
 from app.config import settings
+
+logger = logging.getLogger("order")
+ORDERS = Counter("orders_total", "Orders by final status", ["status"])
 
 
 class CreateOrderRequest(BaseModel):
@@ -36,15 +43,14 @@ async def lifespan(app: FastAPI):
     app.state.pool = await db.create_pool(
         settings.database_url, settings.db_pool_min_size, settings.db_pool_max_size
     )
-    app.state.http = httpx.AsyncClient(
-        base_url=settings.payment_url, timeout=settings.http_timeout_seconds
-    )
+    app.state.http = instrumented_client(settings.payment_url, "payment", settings.http_timeout_seconds)
     yield
     await app.state.http.aclose()
     await app.state.pool.close()
 
 
 app = FastAPI(title="order", lifespan=lifespan)
+instrument(app, "order")
 
 
 async def charge(order: Order) -> str:
@@ -72,12 +78,24 @@ async def create_order(body: CreateOrderRequest, x_user_id: str = Header()):
         payment_id = await charge(order)
     except httpx.HTTPError as exc:
         failed = Order(**dict(await db.update_order_status(pool, order.id, "payment_failed")))
+        ORDERS.labels("payment_failed").inc()
+        logger.warning(
+            "order_payment_failed",
+            extra={"order_id": str(order.id), "user_id": x_user_id, "error": repr(exc)},
+        )
         return JSONResponse(
             status_code=502,
             content={"detail": f"payment failed: {exc!r}", "order": failed.model_dump(mode="json")},
         )
 
-    return Order(**dict(await db.update_order_status(pool, order.id, "paid", payment_id)))
+    paid = Order(**dict(await db.update_order_status(pool, order.id, "paid", payment_id)))
+    ORDERS.labels("paid").inc()
+    logger.info(
+        "order_created",
+        extra={"order_id": str(paid.id), "user_id": x_user_id, "amount_cents": paid.amount_cents,
+               "payment_id": payment_id},
+    )
+    return paid
 
 
 @app.get("/orders/{order_id}", response_model=Order)

@@ -3,8 +3,8 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 1 — working distributed application (happy path).**
-No observability stack, tracing or fault injection yet.
+**Current state: Milestone 2 — observability** (JSON logs, request IDs, Prometheus, Loki, Grafana).
+No tracing or fault injection yet.
 
 ## Architecture
 
@@ -30,7 +30,17 @@ Client → Nginx → Gateway → Auth Service
 | postgres | PostgreSQL 16 | `orders` table (`db/init.sql`) |
 | redis | Redis 7 | Token store (`token:<token> → user_id`) |
 
-Only nginx publishes a port; everything else lives on the internal `backend` network.
+Observability stack:
+
+| Component | Role | Host port |
+|---|---|---|
+| Prometheus | Scrapes app `/metrics` and exporters every 5s | `9090` |
+| Loki | Log storage | — |
+| Grafana Alloy | Tails container logs via the Docker socket, parses JSON, ships to Loki | — |
+| Grafana | Provisioned datasources + dashboards, anonymous admin | `3000` |
+| nginx / postgres / redis exporters | Infrastructure metrics | — |
+
+Everything else lives on the internal `backend` network.
 
 ## Requirements
 
@@ -42,6 +52,7 @@ Only nginx publishes a port; everything else lives on the internal `backend` net
 ```bash
 make up     # build and start everything, waits until all containers are healthy
 make test   # run integration tests (in a container, through nginx)
+make load   # steady traffic, e.g. make load RATE=10 DURATION=120
 make ps     # container status
 make logs   # follow logs
 make down   # stop the environment
@@ -74,6 +85,28 @@ curl -s -XPOST localhost:8080/orders -H "Authorization: Bearer $TOKEN" \
 curl -s localhost:8080/orders/<order-id> -H "Authorization: Bearer $TOKEN"
 ```
 
+## Observability
+
+- **Logs:** every service writes one JSON object per line to stdout:
+  `ts, level, service, logger, msg, request_id` plus event fields. Examples are `order_created`,
+  `payment_approved`, `login_failed` and `dependency_call_failed`, plus one `request` access line per
+  request. Probe and scrape paths (`/health`, `/ready`, `/metrics`) are not logged.
+- **Request ID:** nginx keeps a client `X-Request-ID` or generates one. Every service propagates it on
+  outbound calls and returns it in the response. To follow a request, open the **Logs** dashboard and
+  paste the ID, or query Loki with `{service=~".+"} |= "<id>"`.
+- **Metrics:** each app service exposes `/metrics`:
+  - `http_requests_total{method,route,status}` and `http_request_duration_seconds` (RED);
+  - `dependency_requests_total{dependency,operation,outcome}` and `dependency_request_duration_seconds`
+    (every outbound call to auth/order/payment/postgres/redis);
+  - business counters `logins_total`, `token_validations_total`, `orders_total`, `payments_total`.
+
+  The service name is the Prometheus `job` label.
+- **Dashboards** (Grafana → folder *SRE Testbed*):
+  - *Service Overview*: RED, order-flow latency, business counters, process CPU/memory;
+  - *Dependencies*: every dependency edge, plus PostgreSQL and Redis;
+  - *Logs*: filter by service, level and request_id.
+- Shared telemetry code lives in `libs/observability` and is installed into every service image.
+
 ## API
 
 Public (via nginx, `http://localhost:8080`):
@@ -87,6 +120,8 @@ Public (via nginx, `http://localhost:8080`):
 | GET | `/ready` | Gateway readiness (checks auth and order `/ready`) |
 | GET | `/nginx-health` | Nginx liveness |
 
+All responses carry `X-Request-ID`.
+
 Internal:
 
 | Service | Endpoints |
@@ -95,19 +130,32 @@ Internal:
 | order | `POST /orders`, `GET /orders/{id}` (both require `X-User-Id`), `GET /health`, `GET /ready` (`SELECT 1`) |
 | payment | `POST /payments` → `{payment_id, status: "approved", ...}`, `GET /health` |
 
+Every app service also serves `GET /metrics`.
+
 Downstream transport failures at the gateway map to `502` (unavailable) or `504` (timeout).
 
 ## Tests
 
-`tests/integration/test_happy_path.py` runs inside the compose network against nginx and covers:
-health/readiness, login success and failure, the full order happy path (create → read back from PostgreSQL),
-and rejection of missing/invalid tokens.
+Tests run inside the compose network:
+
+- `test_happy_path.py` goes through nginx and covers health/readiness, login success and failure, the full
+  order happy path (create → read back from PostgreSQL), and rejection of missing or invalid tokens.
+- `test_observability.py` covers:
+  - request IDs are generated and preserved;
+  - `/metrics` on every service, and business and dependency counters grow;
+  - all Prometheus targets are `up`;
+  - one request ID is found in Loki logs of nginx, gateway, auth, order and payment;
+  - Grafana datasources are healthy and the dashboards are provisioned.
 
 ## Repository layout
 
 ```text
-nginx/nginx.conf          reverse proxy config
+nginx/nginx.conf          reverse proxy config (JSON access log, request IDs, stub_status on :8081)
 db/init.sql               PostgreSQL schema
+libs/observability/       shared telemetry package: JSON logging, request-ID middleware, metrics, httpx transport
 services/<name>/          one FastAPI service per directory (Dockerfile, requirements.txt, app/)
+prometheus/ loki/ alloy/  observability stack configs
+grafana/                  provisioning (datasources, dashboard provider) + dashboards/*.json
 tests/integration/        pytest integration suite (runs via `make test`)
+tests/load.py             traffic generator (runs via `make load`)
 ```

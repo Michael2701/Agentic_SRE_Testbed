@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Application services: job name == service name (used as the `job` label in dashboards).
+  - job_name: gateway
+    static_configs: [{ targets: ["gateway:8000"] }]
+  - job_name: auth
+    static_configs: [{ targets: ["auth:8000"] }]
+  - job_name: order
+    static_configs: [{ targets: ["order:8000"] }]
+  - job_name: payment
+    static_configs: [{ targets: ["payment:8000"] }]
+
+  # Infrastructure exporters.
+  - job_name: nginx
+    static_configs: [{ targets: ["nginx-exporter:9113"] }]
+  - job_name: postgres
+    static_configs: [{ targets: ["postgres-exporter:9187"] }]
+  - job_name: redis
+    static_configs: [{ targets: ["redis-exporter:9121"] }]
+
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]

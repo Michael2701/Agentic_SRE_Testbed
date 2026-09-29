@@ -25,7 +25,9 @@ services:
     networks: [backend]
 
   gateway:
-    build: ./services/gateway
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
     environment:
       AUTH_URL: http://auth:8000
       ORDER_URL: http://order:8000
@@ -39,7 +41,9 @@ services:
     networks: [backend]
 
   auth:
-    build: ./services/auth
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379/0
       TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-3600}
@@ -51,7 +55,9 @@ services:
     networks: [backend]
 
   order:
-    build: ./services/order
+    build:
+      context: .
+      dockerfile: services/order/Dockerfile
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}
       PAYMENT_URL: http://payment:8000
@@ -65,7 +71,9 @@ services:
     networks: [backend]
 
   payment:
-    build: ./services/payment
+    build:
+      context: .
+      dockerfile: services/payment/Dockerfile
     healthcheck: *python-healthcheck
     networks: [backend]
 
@@ -94,13 +102,102 @@ services:
       retries: 10
     networks: [backend]
 
+  # --- Observability (M2) ---------------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  loki:
+    image: grafana/loki:3.5.3
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml:ro
+    networks: [backend]
+
+  alloy:
+    image: grafana/alloy:v1.10.0
+    command: ["run", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/service-overview.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus, loki]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [backend]
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.2
+    command: ["--nginx.scrape-uri=http://nginx:8081/stub_status"]
+    depends_on: [nginx]
+    networks: [backend]
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [backend]
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.74.0
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  # --- Tests & load (profile: test) -------------------------------------------
+
   tests:
     build: ./tests
     profiles: [test]
     environment:
       BASE_URL: http://nginx
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://loki:3100
+      GRAFANA_URL: http://grafana:3000
     depends_on:
       nginx:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      grafana:
         condition: service_healthy
     networks: [backend]
 
