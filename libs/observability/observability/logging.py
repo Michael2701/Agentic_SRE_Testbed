@@ -4,6 +4,7 @@ import sys
 from datetime import UTC, datetime
 
 from observability.context import get_request_id
+from observability.tracing import current_trace_ids
 
 # Attributes every LogRecord has; anything else on a record came from `extra=` and is emitted as a field.
 _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime"}
@@ -25,6 +26,9 @@ class JsonFormatter(logging.Formatter):
         request_id = get_request_id()
         if request_id:
             payload["request_id"] = request_id
+        trace_ids = current_trace_ids()
+        if trace_ids:
+            payload["trace_id"], payload["span_id"] = trace_ids
         for key, value in record.__dict__.items():
             if key not in _STANDARD_ATTRS:
                 payload[key] = value

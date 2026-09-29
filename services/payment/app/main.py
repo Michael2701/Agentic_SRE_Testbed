@@ -2,7 +2,7 @@ import logging
 import uuid
 
 from fastapi import FastAPI
-from observability import instrument
+from observability import annotate_span, instrument
 from prometheus_client import Counter
 from pydantic import BaseModel, Field
 
@@ -37,6 +37,7 @@ async def create_payment(body: PaymentRequest) -> PaymentResponse:
         currency=body.currency,
     )
     PAYMENTS.labels(payment.status).inc()
+    annotate_span({"payment.id": payment.payment_id, "order.id": body.order_id, "payment.status": payment.status})
     logger.info(
         "payment_approved",
         extra={"payment_id": payment.payment_id, "order_id": body.order_id, "amount_cents": body.amount_cents},

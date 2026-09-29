@@ -10,7 +10,7 @@ WORKDIR /srv
 
 COPY libs/observability /libs/observability
 COPY services/order/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "/libs/observability[http]"
+RUN pip install --no-cache-dir -r requirements.txt "/libs/observability[http,postgres]"
 
 COPY services/order/app ./app
 

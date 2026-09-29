@@ -17,6 +17,21 @@ def _operation(request: httpx.Request) -> str:
     return f"{request.method} {_ID_SEGMENT.sub('/{id}', request.url.path)}"
 
 
+def _name_client_span(span, request) -> None:
+    """OTel httpx hook: names client spans "POST /payments" instead of the bare method."""
+    if span is None or not span.is_recording():
+        return
+    method = request.method.decode() if isinstance(request.method, bytes) else request.method
+    span.update_name(f"{method} {_ID_SEGMENT.sub('/{id}', request.url.path)}")
+
+
+async def _name_client_span_async(span, request) -> None:
+    _name_client_span(span, request)
+
+
+OTEL_HOOKS = {"request_hook": _name_client_span, "async_request_hook": _name_client_span_async}
+
+
 class InstrumentedTransport(httpx.AsyncBaseTransport):
     """Propagates X-Request-ID and records dependency metrics for every outbound call."""
 
