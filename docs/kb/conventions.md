@@ -4,6 +4,8 @@
   run with `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
 - Shared code is **telemetry only**, in `libs/observability` (see [observability.md](observability.md)).
   Business logic is never shared between services.
+- Fault hook: `faultpoint.install(app)` **before** `instrument(app, ...)` (auth, order, payment; the Dockerfile
+  also installs `/libs/faultpoint`). See [faults.md](faults.md).
 - Every service: `instrument(app, "<name>")` right after creating the app; outbound HTTP through
   `observability.http.instrumented_client(...)`; wrap redis/postgres calls in `track(dep, op)`;
   log events as `logger.info("snake_case_event", extra={...})`. Never log tokens or passwords.

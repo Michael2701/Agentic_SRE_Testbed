@@ -29,7 +29,7 @@ def metric_value(text: str, name: str, **labels) -> float:
     """Sums samples of `name` whose labels include `labels` in Prometheus text exposition."""
     total = 0.0
     for line in text.splitlines():
-        if not line.startswith(name + "{"):
+        if not (line.startswith(name + "{") or line.startswith(name + " ")):  # labelled or unlabelled sample
             continue
         series, value = line.rsplit(" ", 1)
         if all(f'{key}="{val}"' in series for key, val in labels.items()):
@@ -41,6 +41,54 @@ def loki_streams(query: str, since: str = "5m") -> list[dict]:
     return httpx.get(
         f"{LOKI_URL}/loki/api/v1/query_range", params={"query": query, "since": since, "limit": 100}
     ).json()["data"]["result"]
+
+
+# ---------------------------------------------------------------- fault-test helpers
+
+ORDER_METRICS = "http://order:8000/metrics"
+PAYMENT_METRICS = "http://payment:8000/metrics"
+AUTH_METRICS = "http://auth:8000/metrics"
+
+
+def inject(faults, type_: str, target: str | None = None, **parameters) -> dict:
+    body = {"type": type_, "parameters": parameters, "experiment_id": "test-faults"}
+    if target:
+        body["target"] = target
+    response = faults.post("/faults", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def place_order(client, token, request_id: str | None = None) -> tuple[httpx.Response, float]:
+    headers = {"Authorization": f"Bearer {token}"}
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    start = time.monotonic()
+    response = client.post("/orders", json=ORDER, headers=headers, timeout=30)
+    return response, time.monotonic() - start
+
+
+@pytest.fixture(scope="session")
+def faults():
+    with httpx.Client(base_url=FAULT_INJECTOR_URL, timeout=90) as client:
+        yield client
+
+
+@pytest.fixture
+def recover_after(faults, client):
+    """Fault tests use this (via pytestmark): remove all faults and wait until the system is healthy."""
+    yield
+    response = faults.delete("/faults")
+    assert response.status_code == 200, response.text
+
+    def healthy():
+        try:
+            payment_ok = httpx.get("http://payment:8000/health", timeout=2).status_code == 200
+            return payment_ok and client.get("/ready").status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    assert eventually(healthy, timeout=60), "system did not recover after removing faults"
 
 
 @pytest.fixture(scope="session")

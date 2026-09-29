@@ -1,20 +1,18 @@
 import logging
 import uuid
 
+import faultpoint
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from observability import annotate_span, instrument
 from prometheus_client import Counter
 from pydantic import BaseModel, Field
-
-from app import faults
 
 logger = logging.getLogger("payment")
 PAYMENTS = Counter("payments_total", "Payments processed", ["status"])
 
 app = FastAPI(title="payment")
+faultpoint.install(app)  # before instrument(): see faultpoint docstring
 instrument(app, "payment")
-app.include_router(faults.router)
 
 
 class PaymentRequest(BaseModel):
@@ -32,13 +30,7 @@ class PaymentResponse(BaseModel):
 
 
 @app.post("/payments", response_model=PaymentResponse)
-async def create_payment(body: PaymentRequest) -> PaymentResponse | JSONResponse:
-    failure = await faults.apply()
-    if failure is not None:
-        PAYMENTS.labels("error").inc()
-        logger.error("payment_processing_failed", extra={"order_id": body.order_id, "status": failure.status_code})
-        return failure
-
+async def create_payment(body: PaymentRequest) -> PaymentResponse:
     payment = PaymentResponse(
         payment_id=str(uuid.uuid4()),
         status="approved",

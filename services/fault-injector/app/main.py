@@ -10,8 +10,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from app.catalog import FAULT_TYPES
+from app.catalog import FAULT_TYPES, conflict_key
 from app.config import settings
+from app.datastores import Postgres, Redis
 from app.docker_api import Docker
 from app.reconcile import Reconciler
 from app.store import FaultStore, now
@@ -29,6 +30,7 @@ class _JsonFormatter(logging.Formatter):
 _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(_JsonFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[_handler], force=True)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger("fault-injector")
 
 store = FaultStore(settings.database_path)
@@ -55,11 +57,13 @@ async def reconcile_loop(reconciler: Reconciler) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     docker = Docker(settings.docker_socket, settings.compose_project)
-    app.state.reconciler = Reconciler(docker, settings.payment_url)
+    postgres = Postgres(settings.admin_database_url, settings.reporting_database_url)
+    app.state.reconciler = Reconciler(docker, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds)
     task = asyncio.create_task(reconcile_loop(app.state.reconciler))
     yield
     task.cancel()
     await app.state.reconciler.aclose()
+    await postgres.aclose()
     await docker.aclose()
 
 
@@ -85,8 +89,10 @@ async def create_fault(request: FaultRequest):
     target, params = validate(request)
     async with lock:
         active = store.list("active")
-        if any(f["type"] == request.type and f["target"] == target for f in active):
-            raise HTTPException(409, f"an active {request.type} fault on {target} already exists")
+        key = conflict_key(request.type, target)
+        clash = next((f for f in active if conflict_key(f["type"], f["target"]) == key), None)
+        if clash:
+            raise HTTPException(409, f"conflicts with active fault {clash['id']} ({clash['type']} on {target})")
         timestamp = now()
         fault = store.insert({
             "id": f"flt-{secrets.token_hex(6)}",
@@ -98,9 +104,9 @@ async def create_fault(request: FaultRequest):
             await app.state.reconciler.enforce([*active, fault])
         except Exception as exc:
             failed = store.update(fault["id"], "failed", repr(exc))
-            try:
-                await app.state.reconciler.enforce(active)
-            except Exception as rollback_exc:  # the periodic loop keeps retrying
+            try:  # undo whatever was partially applied
+                await app.state.reconciler.revert(fault, active)
+            except Exception as rollback_exc:  # the periodic loop keeps enforcing the remaining faults
                 logger.warning("rollback_failed", extra={"error": repr(rollback_exc)})
             logger.error("fault_failed", extra={"fault_id": fault["id"], "error": repr(exc)})
             return JSONResponse(status_code=502, content={"detail": "could not apply fault", "fault": failed})
@@ -125,7 +131,7 @@ async def _remove(fault: dict) -> dict:
     """Reverts one active fault; it stays active (with an error) if the revert fails."""
     still_active = [f for f in store.list("active") if f["id"] != fault["id"]]
     try:
-        await app.state.reconciler.revert(fault, still_active, settings.healthy_timeout_seconds)
+        await app.state.reconciler.revert(fault, still_active)
     except Exception as exc:
         store.update(fault["id"], "active", f"revert failed: {exc!r}")
         raise HTTPException(502, f"could not revert {fault['id']}: {exc!r}")

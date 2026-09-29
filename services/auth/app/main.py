@@ -2,6 +2,7 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 
+import faultpoint
 import redis.asyncio as redis
 from fastapi import FastAPI, Header, HTTPException
 from observability import annotate_span, instrument, track
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="auth", lifespan=lifespan)
+faultpoint.install(app)  # before instrument(): see faultpoint docstring
 instrument(app, "auth")
 
 

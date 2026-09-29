@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faultpoint"
+version = "0.1.0"
+description = "Control-plane fault hook for testbed services (latency / 5xx), driven by the Fault Injector"
+requires-python = ">=3.12"
+dependencies = []  # uses the service's FastAPI/pydantic
+
+[tool.setuptools]
+packages = ["faultpoint"]

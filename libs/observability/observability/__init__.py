@@ -1,6 +1,9 @@
 """Shared telemetry for testbed services. HTTP client helpers live in `observability.http`."""
 
 from fastapi import FastAPI
+from prometheus_client import REGISTRY
+
+from observability.cgroup import register_cgroup_collector
 
 from observability.context import get_request_id
 from observability.logging import setup_logging
@@ -16,5 +19,6 @@ def instrument(app: FastAPI, service: str, log_level: str = "INFO") -> None:
     setup_logging(service, log_level)
     app.add_middleware(ObservabilityMiddleware)
     app.add_route("/metrics", metrics_endpoint, include_in_schema=False)
+    register_cgroup_collector(REGISTRY)
     # The OTel ASGI middleware wraps the whole stack, so access logs run inside the server span.
     setup_tracing(app, service)
