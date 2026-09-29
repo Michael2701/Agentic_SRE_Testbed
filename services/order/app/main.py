@@ -6,7 +6,7 @@ from datetime import datetime
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
-from observability import instrument
+from observability import annotate_span, instrument
 from observability.http import instrumented_client
 from prometheus_client import Counter
 from pydantic import BaseModel, Field
@@ -73,12 +73,14 @@ async def create_order(body: CreateOrderRequest, x_user_id: str = Header()):
     order = Order(**dict(await db.insert_pending_order(
         pool, x_user_id, body.item, body.quantity, body.amount_cents, body.currency.upper()
     )))
+    annotate_span({"user.id": x_user_id, "order.id": str(order.id)})
 
     try:
         payment_id = await charge(order)
     except httpx.HTTPError as exc:
         failed = Order(**dict(await db.update_order_status(pool, order.id, "payment_failed")))
         ORDERS.labels("payment_failed").inc()
+        annotate_span({"order.status": failed.status})
         logger.warning(
             "order_payment_failed",
             extra={"order_id": str(order.id), "user_id": x_user_id, "error": repr(exc)},
@@ -90,6 +92,7 @@ async def create_order(body: CreateOrderRequest, x_user_id: str = Header()):
 
     paid = Order(**dict(await db.update_order_status(pool, order.id, "paid", payment_id)))
     ORDERS.labels("paid").inc()
+    annotate_span({"order.status": paid.status, "payment.id": payment_id})
     logger.info(
         "order_created",
         extra={"order_id": str(paid.id), "user_id": x_user_id, "amount_cents": paid.amount_cents,

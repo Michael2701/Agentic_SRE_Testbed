@@ -10,7 +10,7 @@ WORKDIR /srv
 
 COPY libs/observability /libs/observability
 COPY services/auth/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "/libs/observability"
+RUN pip install --no-cache-dir -r requirements.txt "/libs/observability[redis]"
 
 COPY services/auth/app ./app
 

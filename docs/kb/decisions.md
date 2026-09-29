@@ -16,3 +16,9 @@ Newest last. Format: milestone: decision (reason).
 - M2: cAdvisor dropped (incompatible with Docker Desktop's containerd store); revisit in M5.
 - M2: nginx upstream re-resolves via Docker DNS (container recreation must not break routing).
 - M2: an early, minimal `make load` (M9 lists it) because "observe normal behaviour" needs traffic.
+- M3: Tempo as the trace backend, with services exporting to it directly (no OTel Collector; fewer moving parts).
+- M3: Python exports OTLP/HTTP (lighter deps than gRPC and fewer PyPI failures); nginx uses gRPC (module limit).
+- M3: nginx is the trace root via `nginx:*-alpine-otel`, so traces start where the client enters.
+- M3: 100% sampling (testbed, low volume; every experiment request must be traceable).
+- M3: request_id kept alongside trace_id (request_id works without tracing, e.g. when Tempo itself is faulted).
+- M3: dashboards generated from `grafana/generate_dashboards.py`, now committed (source of truth).

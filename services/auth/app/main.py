@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as redis
 from fastapi import FastAPI, Header, HTTPException
-from observability import instrument, track
+from observability import annotate_span, instrument, track
 from prometheus_client import Counter
 from pydantic import BaseModel
 
@@ -64,6 +64,7 @@ async def login(body: LoginRequest) -> LoginResponse:
     async with track("redis", "set_token"):
         await app.state.redis.set(TOKEN_PREFIX + token, body.username, ex=settings.token_ttl_seconds)
     LOGINS.labels("success").inc()
+    annotate_span({"user.id": body.username})
     logger.info("login_succeeded", extra={"user_id": body.username})
     return LoginResponse(access_token=token, expires_in=settings.token_ttl_seconds)
 
@@ -78,6 +79,7 @@ async def validate(authorization: str | None = Header(default=None)) -> Validate
         logger.info("token_invalid")
         raise HTTPException(status_code=401, detail="invalid or expired token")
     VALIDATIONS.labels("valid").inc()
+    annotate_span({"user.id": user_id})
     return ValidateResponse(user_id=user_id)
 
 
