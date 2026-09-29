@@ -8,6 +8,12 @@ logger = logging.getLogger("observability.access")
 
 # Probe and scrape traffic would drown the signal in logs and RED metrics.
 UNOBSERVED_PATHS = frozenset({"/health", "/ready", "/metrics"})
+# Control-plane endpoints (fault injection). They must stay invisible to the diagnostic plane.
+CONTROL_PLANE_PREFIX = "/__"
+
+
+def is_unobserved(path: str) -> bool:
+    return path in UNOBSERVED_PATHS or path.startswith(CONTROL_PLANE_PREFIX)
 
 
 class ObservabilityMiddleware:
@@ -44,7 +50,7 @@ class ObservabilityMiddleware:
             logger.exception("unhandled_exception")
             raise
         finally:
-            if scope["path"] not in UNOBSERVED_PATHS:
+            if not is_unobserved(scope["path"]):
                 self._record(scope, status, time.perf_counter() - start)
             request_id_var.reset(token)
 

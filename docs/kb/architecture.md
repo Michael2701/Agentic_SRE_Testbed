@@ -6,7 +6,8 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
 
 - Compose project name `sre-testbed`; containers are `sre-testbed-<svc>-1`.
 - Single network `backend`. Published ports: nginx `${NGINX_PORT:-8080}`, Grafana `${GRAFANA_PORT:-3000}`,
-  Prometheus `${PROMETHEUS_PORT:-9090}`.
+  Prometheus `${PROMETHEUS_PORT:-9090}`, fault-injector `127.0.0.1:${FAULT_INJECTOR_PORT:-8090}` (control
+  plane, see [faults.md](faults.md)). Docker socket is mounted by alloy (ro) and fault-injector (rw).
 - App service images are built with **context = repo root** (`build: {context: ., dockerfile:
   services/<svc>/Dockerfile}`) so `libs/observability` can be copied in. Root `.dockerignore` excludes
   .git, docs, tests.

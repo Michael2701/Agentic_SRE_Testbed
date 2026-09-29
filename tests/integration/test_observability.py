@@ -3,22 +3,10 @@ import uuid
 import httpx
 import pytest
 
-from conftest import GRAFANA_URL, LOKI_URL, ORDER, PROMETHEUS_URL, eventually
+from conftest import GRAFANA_URL, LOKI_URL, ORDER, PROMETHEUS_URL, eventually, metric_value
 
 APP_SERVICES = ["gateway", "auth", "order", "payment"]
 EXPECTED_JOBS = {*APP_SERVICES, "nginx", "postgres", "redis", "prometheus"}
-
-
-def metric_value(text: str, name: str, **labels) -> float:
-    """Sums samples of `name` whose labels include `labels` in Prometheus text exposition."""
-    total = 0.0
-    for line in text.splitlines():
-        if not line.startswith(name + "{"):
-            continue
-        series, value = line.rsplit(" ", 1)
-        if all(f'{key}="{val}"' in series for key, val in labels.items()):
-            total += float(value)
-    return total
 
 
 def test_request_id_generated(client):

@@ -19,8 +19,9 @@ _LIBRARY_INSTRUMENTORS = (
     ("opentelemetry.instrumentation.redis", "RedisInstrumentor"),
 )
 
-# Same paths the access log and RED metrics skip (regexes matched against the URL).
-EXCLUDED_URLS = "/health$,/ready$,/metrics$"
+# Same paths the access log and RED metrics skip (regexes matched against the URL),
+# including control-plane `/__*` endpoints.
+EXCLUDED_URLS = "/health$,/ready$,/metrics$,/__"
 
 
 def setup_tracing(app: FastAPI, service: str) -> None:
