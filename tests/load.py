@@ -50,7 +50,8 @@ async def one_request(client: httpx.AsyncClient, tokens: dict, order_ids: list, 
 async def main(rate: float, duration: float) -> None:
     stats: Counter = Counter()
     order_ids: list = []
-    async with httpx.AsyncClient(base_url=BASE_URL, timeout=10) as client:
+    # Same User-Agent as experiment-runner traffic: experiment load must look like ordinary load.
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=10, headers={"User-Agent": "shop-client/1.0"}) as client:
         tokens = {user: await login(client, user, password) for user, password in USERS}
         if not all(tokens.values()):
             raise SystemExit(f"login failed for some demo users: {tokens}")

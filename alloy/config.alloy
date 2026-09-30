@@ -17,7 +17,7 @@ discovery.relabel "compose" {
   // Control plane stays invisible to the diagnostic plane (ground truth must not leak into Loki).
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "fault-injector"
+    regex         = "fault-injector|experiment-runner"
     action        = "drop"
   }
 

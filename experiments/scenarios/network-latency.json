@@ -1,0 +1,24 @@
+{
+  "name": "network-latency",
+  "description": "300 ms latency on the network path order -> payment.",
+  "faults": [
+    {
+      "type": "network_latency",
+      "target": "order",
+      "parameters": {
+        "delay_ms": 300,
+        "peer": "payment"
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "slow"
+}

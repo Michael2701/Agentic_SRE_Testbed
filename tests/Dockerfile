@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY load.py conftest.py ./
 COPY integration ./integration
 COPY faults ./faults
+COPY experiments ./experiments
 
 # Integration first: fault tests change system state (each one recovers before the next).
-CMD ["pytest", "-v", "-p", "no:cacheprovider", "integration", "faults"]
+CMD ["pytest", "-v", "-p", "no:cacheprovider", "integration", "faults", "experiments"]

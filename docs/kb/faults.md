@@ -17,8 +17,11 @@ symptoms**:
 - netns helper containers have no compose labels, so Alloy never discovers them (it filters on the
   compose project label).
 - Verified by `test_control_plane_invisible_to_diagnostic_plane`.
-- ⚠️ If `alloy/config.alloy` changes while the stack is running, logs shipped before the Alloy restart stay
-  in Loki. Loki has no volume, so `make down && make up` gives a clean slate.
+- ⚠️ If `alloy/config.alloy` changes while the stack is running, `make up` does **not** reload it (a bind
+  mount; compose sees no change), and logs shipped before the Alloy restart stay in Loki. Use
+  `docker compose up -d --force-recreate alloy loki` (Loki has no volume, so this is a clean slate).
+- The experiment-runner (M7, [experiments.md](experiments.md)) is control plane too, under the same rules.
+- `POST /faults/validate` (M7): validates a spec and fills defaults without applying it.
 
 ## Service `services/fault-injector` (control plane, host `127.0.0.1:8090`)
 - Built with context `./services/fault-injector`, **without** `libs/observability`. Plain JSON logs go to

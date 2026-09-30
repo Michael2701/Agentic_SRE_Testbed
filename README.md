@@ -3,11 +3,12 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 6 — infrastructure faults.** A dedicated Fault Injector can break the system in
-19 controlled, reversible ways: CPU, memory, database, Redis and dependencies (M5), plus the network
-(tc netem / iptables in a container's network namespace) and configuration and deployments (real container
-redeploys) in M6. Different root causes produce similar external symptoms. Built on M3 tracing
-(OpenTelemetry → Tempo) and M2 observability (JSON logs, request IDs, Prometheus, Loki, Grafana).
+**Current state: Milestone 7 — experiment framework.** Reproducible experiments run a scenario end to
+end (baseline → inject → observe → record → remove → verify recovery) under generated traffic and store the
+hidden ground truth. They build on a Fault Injector with 19 controlled, reversible faults: CPU, memory,
+database, Redis, dependencies (M5), network, configuration and deployments (M6). Different root causes
+produce similar external symptoms. Built on M3 tracing (OpenTelemetry → Tempo) and M2 observability
+(JSON logs, request IDs, Prometheus, Loki, Grafana).
 
 ## Architecture
 
@@ -60,7 +61,11 @@ make load   # steady traffic, e.g. make load RATE=10 DURATION=120
 make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}'   # inject a fault
 make faults     # list active faults
 make recover    # remove all faults
-make test-faults   # only the fault tests (~3 min)
+make test-faults   # only the fault tests (~5 min)
+make scenarios                           # list experiment scenarios
+make experiment SCENARIO=payment-latency # run one experiment (~75s) and print the verdict
+make experiments                         # recorded experiments, with ground truth
+make test-experiments                    # only the experiment tests (~1 min)
 make ps     # container status
 make logs   # follow logs
 make down   # stop the environment
@@ -215,6 +220,41 @@ make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' EXP=exp-1
 make recover
 ```
 
+## Experiments
+
+`experiment-runner` (`http://localhost:8091`, localhost only) is control plane as well: it drives the
+system only through the fault-injector API and nginx, and its logs and metrics never reach the telemetry
+stack. A scenario (`experiments/scenarios/<name>.json`) names the faults, traffic rate, phase durations and
+the expected symptom (`slow`, `errors`, `auth_errors` or `none`).
+
+```text
+baseline → inject → observe → record → remove → recovery
+(traffic runs throughout; the runner measures every request per phase)
+```
+
+```bash
+$ make experiment SCENARIO=payment-latency
+exp-1  scenario=payment-latency  state=completed
+ground truth: payment_latency on payment {"latency_ms": 1500, "jitter_ms": 0, "probability": 1.0}
+baseline  p50=0.013s p95=0.025s errors=0% 401=0% rps=4.66
+observe   p50=1.515s p95=1.526s errors=0% 401=0% rps=4.83
+verdict: expected=slow observed=['slow'] expected_seen=True recovered=True recovery_seconds=0.0
+```
+
+Each record keeps `ground_truth` (the injected faults: hidden, control plane only) apart from `incident`
+(time window and observed symptoms, without the cause), plus per-phase client stats, a Prometheus snapshot
+and the verdict. Only one experiment runs at a time, and none starts while faults are active.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/scenarios` | scenario files, each validated against the fault catalog |
+| POST | `/experiments` | `{scenario, overrides?}` → 202; `?wait=true` blocks until done (409 busy/faults active) |
+| GET | `/experiments`, `/experiments/{id}` | records (`?format=text` for a summary) |
+| DELETE | `/experiments/{id}` | abort: stop traffic, remove its faults |
+
+Starter scenarios: payment-latency, payment-error, db-slow-query, redis-unavailable, network-latency,
+cpu-saturation, connection-failure, bad-deployment. See `docs/kb/experiments.md`.
+
 ## API
 
 Public (via nginx, `http://localhost:8080`):
@@ -263,6 +303,9 @@ Tests run inside the compose network:
   symptom (slow or 5xx), its specific evidence in telemetry, and recovery.
 - `tests/faults/test_infra_faults.py` covers M6: each network, configuration and deployment fault with its
   symptom, distinguishing evidence and recovery, plus re-application after a target restart.
+- `tests/experiments/test_experiments.py` covers M7: the full lifecycle with shortened phases, ground truth
+  linked to the injector's faults, an incident record without the cause, one experiment at a time, abort,
+  and the runner staying invisible to the telemetry stack.
 - `tests/faults/test_faults.py` runs after the integration tests and recovers after each test. It covers:
   - the fault API (lifecycle, validation, conflicts, delete-all);
   - the incident and the recovery for each fault type (service_unavailable for payment, auth and order);
@@ -282,6 +325,9 @@ prometheus/ loki/ alloy/  observability stack configs
 tempo/                    trace backend config
 grafana/                  provisioning, dashboards/*.json and generate_dashboards.py (their source)
 tests/integration/        pytest integration suite (runs via `make test`)
+services/experiment-runner/  control plane: scenarios, traffic, experiment lifecycle and records (SQLite)
+experiments/scenarios/    scenario files (JSON)
 tests/faults/             fault injection tests (run after integration)
+tests/experiments/        experiment tests (run last)
 tests/load.py             traffic generator (runs via `make load`)
 ```

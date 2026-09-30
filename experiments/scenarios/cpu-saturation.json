@@ -1,0 +1,23 @@
+{
+  "name": "cpu-saturation",
+  "description": "CPU hogs saturate the order container's 0.5 CPU quota.",
+  "faults": [
+    {
+      "type": "cpu_saturation",
+      "target": "order",
+      "parameters": {
+        "workers": 6
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "slow"
+}

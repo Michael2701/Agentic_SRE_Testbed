@@ -158,6 +158,27 @@ services:
     healthcheck: *python-healthcheck
     networks: [backend]
 
+  # Experiments (M7): scenario runs with traffic and hidden ground truth. Control plane as well; it only
+  # touches the system through the fault-injector API and the public nginx entry point.
+  experiment-runner:
+    build: ./services/experiment-runner
+    ports:
+      - "127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8091}:8000"
+    environment:
+      FAULT_INJECTOR_URL: http://fault-injector:8000
+      BASE_URL: http://nginx
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - experimentdata:/data
+      - ./experiments/scenarios:/scenarios:ro
+    depends_on:
+      fault-injector:
+        condition: service_healthy
+      nginx:
+        condition: service_healthy
+    healthcheck: *python-healthcheck
+    networks: [backend]
+
   # --- Observability (M2) ---------------------------------------------------
 
   prometheus:
@@ -258,6 +279,7 @@ services:
       GRAFANA_URL: http://grafana:3000
       TEMPO_URL: http://tempo:3200
       FAULT_INJECTOR_URL: http://fault-injector:8000
+      EXPERIMENT_RUNNER_URL: http://experiment-runner:8000
     depends_on:
       nginx:
         condition: service_healthy
@@ -267,6 +289,8 @@ services:
         condition: service_healthy
       fault-injector:
         condition: service_healthy
+      experiment-runner:
+        condition: service_healthy
     networks: [backend]
 
 networks:
@@ -275,3 +299,4 @@ networks:
 volumes:
   pgdata:
   faultdata:
+  experimentdata:
