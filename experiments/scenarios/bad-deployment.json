@@ -1,0 +1,25 @@
+{
+  "name": "bad-deployment",
+  "description": "A new payment release (1.1.0) fails half of the requests.",
+  "faults": [
+    {
+      "type": "bad_deployment",
+      "target": "payment",
+      "parameters": {
+        "version": "1.1.0",
+        "defect": "errors",
+        "error_rate": 0.5
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "errors"
+}

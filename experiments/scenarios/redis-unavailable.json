@@ -1,0 +1,19 @@
+{
+  "name": "redis-unavailable",
+  "description": "The token store is down; every token validation fails.",
+  "faults": [
+    {
+      "type": "redis_unavailable"
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "errors"
+}

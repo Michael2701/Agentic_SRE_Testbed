@@ -49,4 +49,12 @@ Newest last. Format: milestone: decision (reason).
 - M6: bad_deployment crash = broken entrypoint + restart on-failure (a crash loop), so its logs are shipped.
 - M6: `SERVICE_VERSION` in telemetry (`app_build_info`, log `version`, `service.version`): without it a
   bad deployment can't be diagnosed.
+- M7: experiment-runner is its own service (user's choice) instead of living in the fault-injector: the
+  injector stays a fault API; the runner orchestrates through it and nginx like an external harness.
+- M7: the runner generates its own traffic (same mix/User-Agent as `load.py`, code duplicated because the
+  images have separate build contexts) so it can attribute every request to a phase.
+- M7: verdict from client-side stats (exact per phase); a Prometheus snapshot is stored alongside for
+  comparison with what the diagnostic plane saw.
+- M7: the record splits `ground_truth` (hidden) from `incident` (window + symptoms) already now, so future
+  investigators can be given only the incident.
 - M6: incorrect_timeout default 5ms: 20ms produced no errors at 20 rps (latent), 5ms clips the tail (~6% 504).

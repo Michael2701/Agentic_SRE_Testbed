@@ -1,0 +1,22 @@
+{
+  "name": "payment-error",
+  "description": "Payment simulator fails half of the charges with 500.",
+  "faults": [
+    {
+      "type": "payment_error",
+      "parameters": {
+        "probability": 0.5
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "errors"
+}
