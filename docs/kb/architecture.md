@@ -8,6 +8,9 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
 - Single network `backend`. Published ports: nginx `${NGINX_PORT:-8080}`, Grafana `${GRAFANA_PORT:-3000}`,
   Prometheus `${PROMETHEUS_PORT:-9090}`, fault-injector `127.0.0.1:${FAULT_INJECTOR_PORT:-8090}` (control
   plane, see [faults.md](faults.md)). Docker socket is mounted by alloy (ro) and fault-injector (rw).
+- The fault-injector may **recreate** app containers (M6 redeploy faults: same name, new id and IP; label
+  `io.testbed.rev` while a fault is active; a stopped `<name>-prev` exists for a moment during the swap) and
+  starts short-lived label-less helper containers in a target's network namespace.
 - App service images are built with **context = repo root** (`build: {context: ., dockerfile:
   services/<svc>/Dockerfile}`) so `libs/observability` can be copied in. Root `.dockerignore` excludes
   .git, docs, tests.

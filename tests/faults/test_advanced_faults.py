@@ -4,40 +4,17 @@ Two symptom groups on `POST /orders`: "slow but successful" and "5xx". For each 
 symptom, the recovery, and (separately) the diagnostic evidence it leaves in telemetry.
 """
 
-import statistics
 import time
 
 import httpx
 import pytest
 
 from conftest import (
-    AUTH_METRICS, ORDER_METRICS, PROMETHEUS_URL, eventually, inject, loki_streams, metric_value, place_order,
+    AUTH_METRICS, ORDER_METRICS, eventually, five_xx_ratio, inject, loki_streams, median_latency, metric_value,
+    place_order, prom_value, sample,
 )
 
 pytestmark = pytest.mark.usefixtures("recover_after")
-
-
-def sample(client, token, n: int, spacing: float = 0.25) -> list[tuple[int, float]]:
-    """Requests spread over time (periodic faults hold resources only part of the time)."""
-    results = []
-    for _ in range(n):
-        response, elapsed = place_order(client, token)
-        results.append((response.status_code, elapsed))
-        time.sleep(spacing)
-    return results
-
-
-def median_latency(results) -> float:
-    return statistics.median(elapsed for _, elapsed in results)
-
-
-def five_xx_ratio(results) -> float:
-    return sum(status >= 500 for status, _ in results) / len(results)
-
-
-def prom_value(query: str) -> float:
-    result = httpx.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}).json()["data"]["result"]
-    return float(result[0]["value"][1]) if result else 0.0
 
 
 # ---------------------------------------------------------------- symptom: slow but successful
@@ -173,5 +150,6 @@ def test_no_mechanism_names_in_logs(faults, client, token):
     inject(faults, "cpu_saturation", "payment", workers=1)
     sample(client, token, 3)
     time.sleep(3)
+    # The test runner's own output (e.g. a failed assertion quoting a fault id) is not the diagnostic plane.
     for needle in ("orders_write_hook", "/tmp/.w-", "flt-"):
-        assert loki_streams(f'{{service=~".+"}} |= "{needle}"', since="1h") == [], needle
+        assert loki_streams(f'{{service=~".+", service!="tests"}} |= "{needle}"', since="1h") == [], needle

@@ -1,4 +1,5 @@
 import os
+import statistics
 import time
 
 import httpx
@@ -66,6 +67,29 @@ def place_order(client, token, request_id: str | None = None) -> tuple[httpx.Res
     start = time.monotonic()
     response = client.post("/orders", json=ORDER, headers=headers, timeout=30)
     return response, time.monotonic() - start
+
+
+def sample(client, token, n: int, spacing: float = 0.25) -> list[tuple[int, float]]:
+    """Requests spread over time (periodic faults hold resources only part of the time)."""
+    results = []
+    for _ in range(n):
+        response, elapsed = place_order(client, token)
+        results.append((response.status_code, elapsed))
+        time.sleep(spacing)
+    return results
+
+
+def median_latency(results) -> float:
+    return statistics.median(elapsed for _, elapsed in results)
+
+
+def five_xx_ratio(results) -> float:
+    return sum(status >= 500 for status, _ in results) / len(results)
+
+
+def prom_value(query: str) -> float:
+    result = httpx.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}).json()["data"]["result"]
+    return float(result[0]["value"][1]) if result else 0.0
 
 
 @pytest.fixture(scope="session")

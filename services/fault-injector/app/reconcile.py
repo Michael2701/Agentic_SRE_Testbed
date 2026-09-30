@@ -11,7 +11,10 @@ import httpx
 
 from app.catalog import BACKGROUND_MECHANISMS, FAULT_TYPES, FAULTPOINT_SERVICES
 from app.datastores import Postgres, Redis
+from app.deploy import Deployer
 from app.docker_api import Docker
+from app.network import Network
+from app.store import FaultStore
 from app.workers import Workers
 
 logger = logging.getLogger("reconcile")
@@ -24,17 +27,24 @@ def mechanism(fault: dict) -> str:
 def faultpoint_config(active: list[dict], service: str) -> dict:
     """Merges the active faultpoint faults of one service into its `PUT /__faults` body."""
     config: dict = {}
+
+    def add_error(status: int, probability: float) -> None:  # the highest error probability wins
+        if probability >= config.get("error_probability", 0):
+            config.update(error_status=status, error_probability=probability)
+
     for fault in active:
-        if mechanism(fault) != "faultpoint" or fault["target"] != service:
+        if fault["target"] != service:
             continue
         params = fault["parameters"]
         if fault["type"] == "payment_latency":
             config.update(latency_ms=params["latency_ms"], jitter_ms=params["jitter_ms"],
                           latency_probability=params["probability"])
-        else:  # payment_error | intermittent_errors: the highest error probability wins
-            probability = params.get("probability", params.get("error_rate"))
-            if probability >= config.get("error_probability", 0):
-                config.update(error_status=params["status_code"], error_probability=probability)
+        elif fault["type"] in ("payment_error", "intermittent_errors"):
+            add_error(params["status_code"], params.get("probability", params.get("error_rate")))
+        elif fault["type"] == "bad_deployment" and params["defect"] == "errors":  # the regression of the release
+            add_error(500, params["error_rate"])
+        elif fault["type"] == "bad_deployment" and params["defect"] == "slow":
+            config.update(latency_ms=params["latency_ms"], jitter_ms=params["latency_ms"] // 4, latency_probability=1.0)
     return config
 
 
@@ -43,11 +53,13 @@ def container_targets(active: list[dict], kind: str) -> set[str]:
 
 
 class Reconciler:
-    def __init__(self, docker: Docker, postgres: Postgres, redis_: Redis, healthy_timeout: float):
+    def __init__(self, docker: Docker, store: FaultStore, postgres: Postgres, redis_: Redis, healthy_timeout: float):
         self.docker = docker
         self.postgres = postgres
         self.redis = redis_
         self.workers = Workers(docker)
+        self.network = Network(docker)
+        self.deployer = Deployer(docker, store, healthy_timeout)
         self.healthy_timeout = healthy_timeout
         self._http = httpx.AsyncClient(timeout=3)
         self._tasks: dict[str, asyncio.Task] = {}
@@ -62,6 +74,11 @@ class Reconciler:
 
     async def enforce(self, active: list[dict]) -> None:
         """Applies all active faults. Raises when an active fault cannot be realized."""
+        for fault in active:
+            if mechanism(fault) == "redeploy" and await self.deployer.ensure(fault):
+                if fault["type"] == "bad_deployment" and fault["parameters"]["defect"] != "crash":
+                    # the release's behaviour is pushed to its faultpoint below, so it must be up first
+                    await self.docker.wait_healthy(fault["target"], self.healthy_timeout)
         for target in container_targets(active, "container_stop"):
             await self.docker.stop(target)
         for target in container_targets(active, "container_pause"):
@@ -72,12 +89,15 @@ class Reconciler:
                 await self.workers.ensure(fault)
             elif kind == "pg_trigger":
                 await self.postgres.ensure_slow_trigger(fault["parameters"]["delay_ms"], fault["parameters"]["operations"])
+            elif kind == "netns":
+                await self.network.ensure(fault)
             elif kind in BACKGROUND_MECHANISMS:
                 self._ensure_task(fault)
         await self.push_faultpoints(active)
 
     async def push_faultpoints(self, active: list[dict]) -> None:
         unreachable = container_targets(active, "container_stop") | container_targets(active, "container_pause")
+        unreachable |= {f["target"] for f in active if f["type"] == "bad_deployment" and f["parameters"]["defect"] == "crash"}
         for service in FAULTPOINT_SERVICES - unreachable:
             config = faultpoint_config(active, service)
             try:
@@ -117,6 +137,10 @@ class Reconciler:
             await self.docker.resume_and_wait_healthy(target, self.healthy_timeout)
         elif kind == "container_pause" and target not in container_targets(still_active, "container_pause"):
             await self.docker.resume_and_wait_healthy(target, self.healthy_timeout)
+        elif kind == "redeploy":
+            await self.deployer.restore(target)
+        elif kind == "netns":
+            await self.network.clear(fault)
         elif kind in ("exec_cpu", "exec_memory"):
             await self.workers.kill(target, fault["id"])
         elif kind == "pg_trigger":
