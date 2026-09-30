@@ -31,7 +31,13 @@
   validation, conflicts, no mechanism names in Loki. `status_becomes()` polls past the first requests after a
   redeploy (stale keep-alive/DNS).
 - Loki checks for leaked names exclude `service="tests"`: pytest output of a failed run is shipped too.
-- `make test-faults` runs only `faults/`. Full `make test`: 87 tests, ~5 min.
+- `tests/experiments/test_experiments.py` (9 tests, ~50s), M7: scenarios valid, full lifecycle on
+  payment-latency with shortened phases (`overrides`): phase order/timestamps, ground truth linked to the
+  injector fault (`experiment_id`, removed), incident without the cause, verdict, Prometheus snapshot;
+  payment-error; one-at-a-time 409 + abort during observe removes faults; 409 with an active ad-hoc fault;
+  422s; runner invisible in Loki/Prometheus. The autouse `clean` fixture aborts running experiments and
+  removes faults.
+- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments).
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
   (redeploy not repeated: same container id and label; netem qdisc still there; recover restores the

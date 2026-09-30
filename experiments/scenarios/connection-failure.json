@@ -1,0 +1,23 @@
+{
+  "name": "connection-failure",
+  "description": "Connections from order to payment are reset; payment itself is healthy.",
+  "faults": [
+    {
+      "type": "connection_failure",
+      "target": "order",
+      "parameters": {
+        "peer": "payment"
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 5
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 30,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 90
+  },
+  "expect": "errors"
+}

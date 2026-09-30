@@ -7,7 +7,8 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
 - Compose project name `sre-testbed`; containers are `sre-testbed-<svc>-1`.
 - Single network `backend`. Published ports: nginx `${NGINX_PORT:-8080}`, Grafana `${GRAFANA_PORT:-3000}`,
   Prometheus `${PROMETHEUS_PORT:-9090}`, fault-injector `127.0.0.1:${FAULT_INJECTOR_PORT:-8090}` (control
-  plane, see [faults.md](faults.md)). Docker socket is mounted by alloy (ro) and fault-injector (rw).
+  plane, see [faults.md](faults.md)), experiment-runner `127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8091}` (control
+  plane, see [experiments.md](experiments.md)). Docker socket is mounted by alloy (ro) and fault-injector (rw).
 - The fault-injector may **recreate** app containers (M6 redeploy faults: same name, new id and IP; label
   `io.testbed.rev` while a fault is active; a stopped `<name>-prev` exists for a moment during the swap) and
   starts short-lived label-less helper containers in a target's network namespace.

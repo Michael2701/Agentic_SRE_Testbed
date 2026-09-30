@@ -87,6 +87,13 @@ def validate(request: FaultRequest) -> tuple[str, dict]:
     return target, params
 
 
+@app.post("/faults/validate")
+async def validate_fault(request: FaultRequest) -> dict:
+    """Dry run: validates and fills defaults without applying anything (used by experiment-runner)."""
+    target, params = validate(request)
+    return {"type": request.type, "target": target, "parameters": params}
+
+
 @app.post("/faults", status_code=201)
 async def create_fault(request: FaultRequest):
     target, params = validate(request)
