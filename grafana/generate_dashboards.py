@@ -117,6 +117,11 @@ overview = [
     ts("Memory pressure (PSI some)", [(f'rate(container_memory_pressure_stalled_seconds_total{{{APPS}}}[1m])', "{{job}}")],
        8, 56, w=8, unit="percentunit", soft_max=1, desc="Share of time at least one task was stalled on memory (reclaim)."),
     ts("OOM kills", [(f'increase(container_oom_kills_total{{{APPS}}}[5m])', "{{job}}")], 16, 56, w=8),
+    row("Releases", 64),
+    ts("Running version", [(f'app_build_info{{{APPS}}}', "{{job}} {{version}}")], 0, 65, w=12,
+       desc="One series per (service, version); a new series appearing marks a deployment."),
+    ts("Process uptime", [(f'time() - process_start_time_seconds{{{APPS}}}', "{{job}}")], 12, 65, w=12, unit="s",
+       desc="Drops to 0 when the process restarts (redeploy, crash, container restart)."),
 ]
 
 # ---------------------------------------------------------------- Dependencies

@@ -8,6 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
+# Network faults: the injector's own image doubles as the helper that runs tc/iptables in a target's netns.
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 iptables \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

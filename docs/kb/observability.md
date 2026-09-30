@@ -3,6 +3,9 @@
 ## Shared library `libs/observability` (telemetry only, no business logic)
 - `instrument(app, service)` in `__init__.py` sets up JSON logging, adds `ObservabilityMiddleware`
   and `GET /metrics`. Every service calls it right after `app = FastAPI(...)`.
+- Release version (M6): env `SERVICE_VERSION` (default `1.0.0`) → `version` field on every log line, OTel
+  resource `service.version`, gauge `app_build_info{version}` = 1. A redeploy shows up as a new series;
+  Service Overview row *Releases* has "Running version" and "Process uptime" (`time() - process_start_time_seconds`).
 - `context.py`: `request_id_var` (contextvar) and `accept_or_generate()`, which keeps well-formed
   incoming IDs (`[A-Za-z0-9._-]{1,128}`) and otherwise uses uuid4 hex.
 - `middleware.py`: pure ASGI middleware. It sets the request ID, echoes `x-request-id` in the response,

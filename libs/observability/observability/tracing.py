@@ -24,10 +24,11 @@ _LIBRARY_INSTRUMENTORS = (
 EXCLUDED_URLS = "/health$,/ready$,/metrics$,/__"
 
 
-def setup_tracing(app: FastAPI, service: str) -> None:
+def setup_tracing(app: FastAPI, service: str, version: str = "1.0.0") -> None:
     """Exports spans over OTLP/HTTP (endpoint from OTEL_EXPORTER_OTLP_ENDPOINT); samples everything."""
     provider = TracerProvider(
-        resource=Resource.create({"service.name": service}), sampler=ParentBased(ALWAYS_ON)
+        resource=Resource.create({"service.name": service, "service.version": version}),
+        sampler=ParentBased(ALWAYS_ON),
     )
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)

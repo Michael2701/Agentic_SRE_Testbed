@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from app.catalog import FAULT_TYPES, conflict_key
+from app.catalog import FAULT_TYPES, check_target, conflict_key
 from app.config import settings
 from app.datastores import Postgres, Redis
 from app.docker_api import Docker
@@ -58,7 +58,7 @@ async def reconcile_loop(reconciler: Reconciler) -> None:
 async def lifespan(app: FastAPI):
     docker = Docker(settings.docker_socket, settings.compose_project)
     postgres = Postgres(settings.admin_database_url, settings.reporting_database_url)
-    app.state.reconciler = Reconciler(docker, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds)
+    app.state.reconciler = Reconciler(docker, store, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds)
     task = asyncio.create_task(reconcile_loop(app.state.reconciler))
     yield
     task.cancel()
@@ -81,6 +81,9 @@ def validate(request: FaultRequest) -> tuple[str, dict]:
         params = fault_type.params(**request.parameters).model_dump()
     except ValidationError as exc:
         raise HTTPException(422, json.loads(exc.json(include_url=False)))
+    error = check_target(request.type, target, params)
+    if error:
+        raise HTTPException(422, error)
     return target, params
 
 

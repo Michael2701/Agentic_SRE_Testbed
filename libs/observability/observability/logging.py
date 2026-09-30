@@ -11,15 +11,17 @@ _STANDARD_ATTRS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | 
 
 
 class JsonFormatter(logging.Formatter):
-    def __init__(self, service: str):
+    def __init__(self, service: str, version: str):
         super().__init__()
         self.service = service
+        self.version = version
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             "level": record.levelname.lower(),
             "service": self.service,
+            "version": self.version,
             "logger": record.name,
             "msg": record.getMessage(),
         }
@@ -37,10 +39,10 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def setup_logging(service: str, level: str = "INFO") -> None:
+def setup_logging(service: str, level: str = "INFO", version: str = "1.0.0") -> None:
     """Routes all logging (including uvicorn's) to stdout as one JSON object per line."""
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service))
+    handler.setFormatter(JsonFormatter(service, version))
 
     root = logging.getLogger()
     root.handlers = [handler]

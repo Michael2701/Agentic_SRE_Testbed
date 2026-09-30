@@ -1,5 +1,7 @@
 """SQLite persistence for faults (stdlib only; the file lives on the `faultdata` volume)."""
 
+from __future__ import annotations  # `list` below is also a method name
+
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -18,6 +20,14 @@ CREATE TABLE IF NOT EXISTS faults (
     updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS faults_state_idx ON faults (state);
+-- Env/command/restart policy of a container as compose created it, saved before the first redeploy
+-- (see deploy.py).
+CREATE TABLE IF NOT EXISTS baselines (
+    service TEXT PRIMARY KEY,
+    env     TEXT NOT NULL,
+    cmd     TEXT NOT NULL,
+    restart TEXT NOT NULL
+);
 """
 
 
@@ -62,3 +72,14 @@ class FaultStore:
             "UPDATE faults SET state = ?, error = ?, updated_at = ? WHERE id = ?", (state, error, now(), fault_id)
         )
         return self.get(fault_id)
+
+    def save_baseline(self, service: str, env: list[str], cmd: list[str], restart: dict) -> None:
+        self._db.execute("INSERT OR REPLACE INTO baselines VALUES (?, ?, ?, ?)",
+                         (service, json.dumps(env), json.dumps(cmd), json.dumps(restart)))
+
+    def baseline(self, service: str) -> tuple[list[str], list[str], dict] | None:
+        row = self._db.execute("SELECT env, cmd, restart FROM baselines WHERE service = ?", (service,)).fetchone()
+        return (json.loads(row["env"]), json.loads(row["cmd"]), json.loads(row["restart"])) if row else None
+
+    def delete_baseline(self, service: str) -> None:
+        self._db.execute("DELETE FROM baselines WHERE service = ?", (service,))
