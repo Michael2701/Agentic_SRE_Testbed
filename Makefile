@@ -24,7 +24,7 @@ test-faults: ## Run only the fault injection tests (~3 min)
 	$(COMPOSE) --profile test run --rm --build tests pytest -v -p no:cacheprovider faults
 
 fault: ## Inject a fault: make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' [TARGET=payment] [EXP=exp-1]
-	@test -n "$(TYPE)" || { echo "TYPE is required (payment-latency | payment-error | service-unavailable)"; exit 2; }
+	@test -n "$(TYPE)" || { echo "TYPE is required, e.g. payment-latency, network-latency, bad-deployment (all types: README, Fault injection)"; exit 2; }
 	@curl -s -XPOST $(FAULTS_URL)/faults -H 'content-type: application/json' \
 		-d '{"type":"$(subst -,_,$(TYPE))","parameters":$(PARAMS)$(if $(TARGET),$(comma)"target":"$(TARGET)")$(if $(EXP),$(comma)"experiment_id":"$(EXP)")}' | $(PRETTY)
 

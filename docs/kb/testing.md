@@ -6,7 +6,8 @@
   `/ready` (`READY_TIMEOUT_SECONDS`, default 60), and the `token` fixture logs in as alice. It also holds
   URLs, `DEMO_USER`, `ORDER`, `eventually()`, `metric_value()` (labelled *and* unlabelled samples),
   `loki_streams()`, the `*_METRICS` URLs and the fault helpers `faults` (session injector client),
-  `recover_after`, `inject()`, `place_order()`. Fault modules opt in with
+  `recover_after`, `inject()`, `place_order()`, `sample()`, `median_latency()`, `five_xx_ratio()`,
+  `prom_value()`. Fault modules opt in with
   `pytestmark = pytest.mark.usefixtures("recover_after")`. Import them with
   `from conftest import ...`. Keep a single conftest: two `conftest.py` files would clash on that import.
 - Order: `pytest integration faults` (tests/Dockerfile CMD). Fault tests run last because they mutate state.
@@ -22,9 +23,19 @@
     timeout outcome);
   - validation, container-state conflict, no mechanism names in Loki.
   - `sample()` spaces requests 250 ms apart because periodic faults need it.
-- `make test-faults` runs only `faults/`.
+- `tests/faults/test_infra_faults.py` (23 tests, ~2.5 min), M6: network latency to one peer (client-side
+  postgres latency up, payment edge flat), re-application after a target restart, packet-loss tail,
+  connection failure reject (fast 502, peer healthy) / drop (504), incorrect endpoint (DNS error, uptime
+  reset, payment never reached, recovery), incorrect timeout (fast 504), short token TTL (401 after 3s),
+  bad deployment errors (`app_build_info` 1.1.0, version in Loki) and crash loop (`up=0`, crash log in Loki),
+  validation, conflicts, no mechanism names in Loki. `status_becomes()` polls past the first requests after a
+  redeploy (stale keep-alive/DNS).
+- Loki checks for leaked names exclude `service="tests"`: pytest output of a failed run is shipped too.
+- `make test-faults` runs only `faults/`. Full `make test`: 87 tests, ~5 min.
 - Not automated (the tests container has no docker socket): fault persistence across an injector
-  restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active).
+  restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
+  (redeploy not repeated: same container id and label; netem qdisc still there; recover restores the
+  baseline and empties `baselines`).
 - `integration/test_happy_path.py` (6 tests): health/ready, login ok/bad, create order → read it back, orders
   without a token or with an invalid token → 401.
 - `test_observability.py` (10 tests): request ID generated/preserved, `/metrics` per service

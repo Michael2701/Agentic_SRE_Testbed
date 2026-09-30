@@ -1,7 +1,7 @@
 import time
 from contextlib import asynccontextmanager
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -15,6 +15,7 @@ HTTP_REQUESTS = Counter(
 HTTP_DURATION = Histogram(
     "http_request_duration_seconds", "Inbound HTTP request duration", ["method", "route"], buckets=BUCKETS
 )
+BUILD_INFO = Gauge("app_build_info", "Running release of the service (always 1)", ["version"])
 DEPENDENCY_REQUESTS = Counter(
     "dependency_requests_total", "Outbound calls to dependencies", ["dependency", "operation", "outcome"]
 )

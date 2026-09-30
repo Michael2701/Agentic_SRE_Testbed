@@ -3,10 +3,11 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 5 — advanced faults.** A dedicated Fault Injector can break the system in 12
-controlled, reversible ways (CPU, memory, database, Redis, dependencies), and different root causes produce
-similar external symptoms. Built on M3 tracing (OpenTelemetry → Tempo) and M2 observability (JSON
-logs, request IDs, Prometheus, Loki, Grafana).
+**Current state: Milestone 6 — infrastructure faults.** A dedicated Fault Injector can break the system in
+19 controlled, reversible ways: CPU, memory, database, Redis and dependencies (M5), plus the network
+(tc netem / iptables in a container's network namespace) and configuration and deployments (real container
+redeploys) in M6. Different root causes produce similar external symptoms. Built on M3 tracing
+(OpenTelemetry → Tempo) and M2 observability (JSON logs, request IDs, Prometheus, Loki, Grafana).
 
 ## Architecture
 
@@ -107,9 +108,12 @@ curl -s localhost:8080/orders/<order-id> -H "Authorization: Bearer $TOKEN"
     (every outbound call to auth/order/payment/postgres/redis);
   - business counters `logins_total`, `token_validations_total`, `orders_total`, `payments_total`.
 
+  - `app_build_info{version}`: the running release (env `SERVICE_VERSION`, default `1.0.0`; also the
+    `version` log field and the `service.version` span resource attribute).
+
   The service name is the Prometheus `job` label.
 - **Dashboards** (Grafana → folder *SRE Testbed*):
-  - *Service Overview*: RED, order-flow latency, business counters, process and container resources (CPU, throttling, memory, PSI);
+  - *Service Overview*: RED, order-flow latency, business counters, process and container resources (CPU, throttling, memory, PSI), releases (running version, process uptime);
   - *Dependencies*: every dependency edge, plus PostgreSQL (connections by role, locks) and Redis;
   - *Logs*: filter by service, level and request_id.
   - *Traces*: service map, recent and slow `POST /orders` traces, per-edge metrics from spans.
@@ -175,17 +179,30 @@ Each fault has `id`, `experiment_id`, `type`, `target`, `parameters`, `created_a
 | `db_connection_exhaustion` | postgres | — | another role holds every normal connection slot |
 | `db_lock_contention` | postgres | `hold_ms`, `interval_ms` | periodic `LOCK TABLE orders IN SHARE MODE` |
 | `redis_latency` | redis | `pause_ms`, `interval_ms` | periodic `CLIENT PAUSE` |
+| `network_latency` | app services, postgres, redis | `delay_ms`, `jitter_ms`, `peer`? | `tc netem delay` in the target's network namespace (only towards `peer` if given) |
+| `packet_loss` | same | `loss_percent`, `peer`? | `tc netem loss` |
+| `connection_failure` | gateway, auth, order | `peer`, `mode` (reject\|drop) | `iptables` rejects (TCP reset) or drops traffic to the peer |
+| `incorrect_endpoint` | gateway, order, auth | `dependency`, `endpoint`? | redeploy with a wrong dependency URL (default: host name typo) |
+| `incorrect_timeout` | gateway, order | `timeout_ms` (=5) | redeploy with a too-short HTTP timeout |
+| `bad_configuration` | gateway, order, auth | `settings` (allowlisted env vars) | redeploy with e.g. `DB_POOL_MAX_SIZE=1`, `TOKEN_TTL_SECONDS=2` |
+| `bad_deployment` | auth, order, payment | `version`, `defect` (crash\|errors\|slow), `error_rate`, `latency_ms` | redeploy as a new version that crash-loops, returns 5xx or is slow |
 
-Similar symptoms, different causes (verified by `tests/faults/test_advanced_faults.py`):
+Network faults run `tc`/`iptables` from a short-lived helper container that shares the target's network
+namespace; app images are unchanged. Redeploy faults recreate the target container (same name, image and
+network aliases) with a changed environment, like a real rollout; removing the fault redeploys the original.
+
+Similar symptoms, different causes (verified by `tests/faults/test_advanced_faults.py` and `test_infra_faults.py`):
 
 | Symptom on `POST /orders` | Root causes |
 |---|---|
-| slow, still 201 | payment_latency, db_slow_query, db_lock_contention, redis_latency, cpu_saturation |
-| 5xx | payment_error, intermittent_errors, db_connection_exhaustion, redis_unavailable, dependency_timeout, service_unavailable |
-| nothing visible externally | memory_pressure (only container memory metrics) |
+| slow, still 201 | payment_latency, db_slow_query, db_lock_contention, redis_latency, cpu_saturation, network_latency, packet_loss (tail), bad_deployment slow |
+| 5xx | payment_error, intermittent_errors, db_connection_exhaustion, redis_unavailable, dependency_timeout, service_unavailable, connection_failure, incorrect_endpoint, incorrect_timeout, bad_deployment crash/errors |
+| 401 | bad_configuration (short token TTL) |
+| nothing visible externally | memory_pressure (only container memory metrics); bad_configuration pool=1 until the DB is slow |
 
 Each cause leaves different evidence (dependency latencies, spans, container throttling, `pg_locks`,
-connection counts, timeout vs. connection-error outcomes). See `docs/kb/faults.md`.
+connection counts, timeout vs. connection-error outcomes, a healthy peer, DNS errors, a new release version
+and process restart). See `docs/kb/faults.md`.
 
 Faults are persisted (SQLite) and re-applied every 2s, so they survive restarts of the injector or the
 target. Removing a fault reverts it; for `service_unavailable` the container is started and the injector
@@ -244,6 +261,8 @@ Tests run inside the compose network:
   - Grafana reaches Tempo.
 - `tests/faults/test_advanced_faults.py` covers the M5 DoD: for each root cause it checks the shared
   symptom (slow or 5xx), its specific evidence in telemetry, and recovery.
+- `tests/faults/test_infra_faults.py` covers M6: each network, configuration and deployment fault with its
+  symptom, distinguishing evidence and recovery, plus re-application after a target restart.
 - `tests/faults/test_faults.py` runs after the integration tests and recovers after each test. It covers:
   - the fault API (lifecycle, validation, conflicts, delete-all);
   - the incident and the recovery for each fault type (service_unavailable for payment, auth and order);
@@ -254,10 +273,9 @@ Tests run inside the compose network:
 
 ```text
 nginx/nginx.conf          reverse proxy config (JSON access log, request IDs, stub_status on :8081)
-db/init.sql               PostgreSQL schema
 libs/observability/       shared telemetry package: JSON logging, request-ID middleware, metrics, httpx transport
 services/<name>/          one FastAPI service per directory (Dockerfile, requirements.txt, app/)
-services/fault-injector/  control plane: fault API, SQLite store, Docker API, Postgres/Redis mechanisms, reconcile loop
+services/fault-injector/  control plane: fault API, SQLite store, Docker API, Postgres/Redis, network (tc/iptables) and redeploy mechanisms, reconcile loop
 libs/faultpoint/          app-level fault hook (latency / 5xx) used by auth, order, payment
 db/migrations/            idempotent SQL (schema, roles), applied by the db-migrate service
 prometheus/ loki/ alloy/  observability stack configs

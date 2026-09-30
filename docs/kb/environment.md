@@ -6,6 +6,12 @@
   Give the user the commands to run themselves.
 - In the user's plain terminal a `! cmd` prefix is not needed; zsh just negates the exit code.
 - Docker Desktop uses the containerd image store (`docker info` driver `overlayfs`), which breaks cAdvisor.
+  It also rejects the inspect-level `Image` digest in `POST /containers/create` ("No such image"); use
+  `Config.Image` (the tag).
+- Docker Desktop's linuxkit kernel (7.0) supports `sch_netem`, `prio` + `u32` filters and iptables (nf_tables
+  backend) inside a container netns with `NET_ADMIN` (checked in M6).
+- Alloy (`discovery.docker`) lists only running/restarting containers: logs of a container that exited
+  for good are never shipped.
 - PyPI occasionally times out during parallel image builds. pip timeouts/retries are raised in Dockerfiles;
   if it still fails, just rerun `make up`.
 - Headless Chrome screenshots of Grafana hang (live refresh keeps the page busy). Verify dashboards

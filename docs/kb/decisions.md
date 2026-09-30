@@ -40,3 +40,13 @@ Newest last. Format: milestone: decision (reason).
 - M5: schema/roles via idempotent migrations (db-migrate service) instead of initdb (works on existing volumes).
 - M5: `redis_latency` via CLIENT PAUSE, because DEBUG SLEEP is disabled in Redis 7 (`enable-debug-command no`).
   Network-level latency (tc/netem) is left for M6.
+- M6: network faults via a throwaway helper container in the target's netns (Pumba-style), built from the
+  injector image, instead of adding NET_ADMIN + iproute2 to app images or a permanent sidecar per service.
+- M6: config faults are real redeploys (container recreated through the Docker API with changed env) rather
+  than runtime config endpoints: the process restarts and reads the config, like a real rollout. No compose
+  CLI inside the injector; the baseline is saved in SQLite and restored.
+- M6: one netns fault per target and one of stop/pause/redeploy per container (409) instead of merging.
+- M6: bad_deployment crash = broken entrypoint + restart on-failure (a crash loop), so its logs are shipped.
+- M6: `SERVICE_VERSION` in telemetry (`app_build_info`, log `version`, `service.version`): without it a
+  bad deployment can't be diagnosed.
+- M6: incorrect_timeout default 5ms: 20ms produced no errors at 20 rps (latent), 5ms clips the tail (~6% 504).
