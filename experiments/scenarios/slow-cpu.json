@@ -1,0 +1,35 @@
+{
+  "name": "slow-cpu",
+  "description": "CPU hogs saturate the order container's quota.",
+  "tags": [
+    "same-symptom"
+  ],
+  "faults": [
+    {
+      "type": "cpu_saturation",
+      "target": "order",
+      "parameters": {
+        "workers": 16
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "application"
+    ],
+    "normal_domains": [
+      "redis"
+    ]
+  }
+}

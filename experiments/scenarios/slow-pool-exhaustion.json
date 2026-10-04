@@ -1,0 +1,46 @@
+{
+  "name": "slow-pool-exhaustion",
+  "description": "Order's connection pool is too small for slightly slow queries; requests queue for a connection.",
+  "tags": [
+    "same-symptom"
+  ],
+  "faults": [
+    {
+      "type": "bad_configuration",
+      "target": "order",
+      "parameters": {
+        "settings": {
+          "DB_POOL_MIN_SIZE": 1,
+          "DB_POOL_MAX_SIZE": 2
+        }
+      }
+    },
+    {
+      "type": "db_slow_query",
+      "parameters": {
+        "delay_ms": 300
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "database"
+    ],
+    "normal_domains": [
+      "application",
+      "redis",
+      "payment"
+    ]
+  }
+}

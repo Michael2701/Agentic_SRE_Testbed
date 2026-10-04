@@ -13,6 +13,7 @@ from app.catalog import BACKGROUND_MECHANISMS, FAULT_TYPES, FAULTPOINT_SERVICES
 from app.datastores import Postgres, Redis
 from app.deploy import Deployer
 from app.docker_api import Docker
+from app.edge import Edge
 from app.network import Network
 from app.store import FaultStore
 from app.workers import Workers
@@ -53,13 +54,15 @@ def container_targets(active: list[dict], kind: str) -> set[str]:
 
 
 class Reconciler:
-    def __init__(self, docker: Docker, store: FaultStore, postgres: Postgres, redis_: Redis, healthy_timeout: float):
+    def __init__(self, docker: Docker, store: FaultStore, postgres: Postgres, redis_: Redis, healthy_timeout: float,
+                 edge_dir: str):
         self.docker = docker
         self.postgres = postgres
         self.redis = redis_
         self.workers = Workers(docker)
         self.network = Network(docker)
         self.deployer = Deployer(docker, store, healthy_timeout)
+        self.edge = Edge(docker, edge_dir)
         self.healthy_timeout = healthy_timeout
         self._http = httpx.AsyncClient(timeout=3)
         self._tasks: dict[str, asyncio.Task] = {}
@@ -93,6 +96,7 @@ class Reconciler:
                 await self.network.ensure(fault)
             elif kind in BACKGROUND_MECHANISMS:
                 self._ensure_task(fault)
+        await self.edge.ensure(active)
         await self.push_faultpoints(active)
 
     async def push_faultpoints(self, active: list[dict]) -> None:
@@ -141,6 +145,8 @@ class Reconciler:
             await self.deployer.restore(target)
         elif kind == "netns":
             await self.network.clear(fault)
+        elif kind == "edge_config":
+            await self.edge.ensure(still_active)
         elif kind in ("exec_cpu", "exec_memory"):
             await self.workers.kill(target, fault["id"])
         elif kind == "pg_trigger":
