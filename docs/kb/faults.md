@@ -77,6 +77,12 @@ symptoms**:
   exhaustion admin). The app uses the non-superuser `order_svc`, so exhaustion is deterministic while
   operators still get in.
 
+## M8 additions
+- `nginx` is a netns target; `proxy_bandwidth_limit` / `proxy_rate_limit` (mechanism `edge_config`,
+  `app/edge.py`: snippets in the shared volume `edgeconf` + `nginx -s reload`); `bad_deployment
+  defect=none` (harmless release). Details and conflicts: [challenges.md](challenges.md).
+- `cpu_saturation.workers` limit 8 → 32.
+
 ## M6 mechanisms
 **netns** (`network.py`): `Docker.run_helper` starts a throwaway container from the injector's **own image**
 (it has `iproute2` + `iptables`) with `NetworkMode: container:<target>` and `CapAdd: NET_ADMIN`, runs the

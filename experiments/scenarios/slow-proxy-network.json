@@ -1,0 +1,38 @@
+{
+  "name": "slow-proxy-network",
+  "description": "1.1 s latency on the network path nginx -> gateway (paid twice: nginx opens a new upstream connection per request).",
+  "tags": [
+    "same-symptom",
+    "model-breaking"
+  ],
+  "faults": [
+    {
+      "type": "network_latency",
+      "target": "nginx",
+      "parameters": {
+        "delay_ms": 1100,
+        "peer": "gateway"
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [],
+    "normal_domains": [
+      "application",
+      "database",
+      "redis",
+      "payment"
+    ]
+  }
+}

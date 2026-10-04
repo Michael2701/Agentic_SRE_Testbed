@@ -1,0 +1,36 @@
+{
+  "name": "slow-db-query",
+  "description": "Every order write to PostgreSQL takes 1.1 s.",
+  "tags": [
+    "same-symptom"
+  ],
+  "faults": [
+    {
+      "type": "db_slow_query",
+      "parameters": {
+        "delay_ms": 1100
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "database"
+    ],
+    "normal_domains": [
+      "application",
+      "redis",
+      "payment"
+    ]
+  }
+}

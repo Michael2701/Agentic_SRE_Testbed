@@ -86,7 +86,8 @@ def test_connection_failure_reject(faults, client, token):
     assert response.status_code == 502 and elapsed < 1
     # Unlike service_unavailable, the peer itself is up and healthy: only this path is broken.
     assert httpx.get("http://payment:8000/health").status_code == 200
-    assert prom_value('up{job="payment"}') == 1
+    # eventually: a previous test (packet loss on payment) may have failed the last scrape
+    assert eventually(lambda: prom_value('up{job="payment"}') == 1, timeout=15)
 
 
 def test_connection_failure_drop(faults, client, token):
@@ -168,7 +169,7 @@ def test_bad_deployment_crash_loop(faults, client, token):
 
 @pytest.mark.parametrize("body", [
     {"type": "network_latency", "target": "order", "parameters": {"delay_ms": 10, "peer": "order"}},
-    {"type": "network_latency", "target": "nginx", "parameters": {"delay_ms": 10}},
+    {"type": "network_latency", "target": "tempo", "parameters": {"delay_ms": 10}},  # nginx is a target since M8
     {"type": "packet_loss", "target": "payment", "parameters": {"loss_percent": 0}},
     {"type": "connection_failure", "target": "order", "parameters": {}},
     {"type": "connection_failure", "target": "payment", "parameters": {"peer": "order"}},

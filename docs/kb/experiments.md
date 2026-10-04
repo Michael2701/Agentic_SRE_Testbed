@@ -19,8 +19,10 @@
   ground truth) and become `aborted`.
 
 ## Scenarios (`experiments/scenarios/<name>.json`, mounted ro at `/scenarios`)
-`{name (= file stem), description, faults: [{type, target?, parameters}], traffic: {rate}, durations:
-{baseline_s, observe_s, recovery_window_s, recovery_timeout_s}, expect: slow|errors|auth_errors|none}`.
+`{name (= file stem), description, tags?, faults: [{type, target?, parameters, at_s?}], traffic: {rate,
+max_in_flight?}, durations: {baseline_s, observe_s, recovery_window_s, recovery_timeout_s},
+expect: slow|errors|auth_errors|none, evidence?}`. M8 fields (tags, at_s, max_in_flight, evidence,
+`overrides.time_scale`, onset, domain view) are described in [challenges.md](challenges.md).
 Starter set (one simple cause each): payment-latency, payment-error, db-slow-query, redis-unavailable,
 network-latency (order→payment), cpu-saturation, connection-failure, bad-deployment. `faults` is a list so
 M8 can combine causes; timed offsets between faults are not there yet (M8).

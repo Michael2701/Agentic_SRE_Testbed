@@ -57,4 +57,13 @@ Newest last. Format: milestone: decision (reason).
   comparison with what the diagnostic plane saw.
 - M7: the record splits `ground_truth` (hidden) from `incident` (window + symptoms) already now, so future
   investigators can be given only the incident.
+- M8: same-symptom threshold is absolute (p95 > 2 s, 201) with identical traffic (user's Q2).
+- M8: pool exhaustion = small pool + slightly slow DB (Q1: B), not a new injector mode.
+- M8: bounded client concurrency (`max_in_flight: 10`) for the same-symptom set (Q4: B), because open-loop
+  load makes saturation causes flip between "fine" and "collapsed" run to run.
+- M8: proxy config fault via include snippets on a shared volume + graceful reload (a config-management
+  rollout), not by editing the bind-mounted nginx.conf.
+- M8: the runner's per-domain view deliberately excludes the proxy: it models what the dashboards cover,
+  which is what model-breaking scenarios exploit.
+- M8: order pool 30 and httpx keepalive 100 as the baseline (realistic sizing; see challenges.md).
 - M6: incorrect_timeout default 5ms: 20ms produced no errors at 20 rps (latent), 5ms clips the tail (~6% 504).

@@ -30,6 +30,14 @@
   bad deployment errors (`app_build_info` 1.1.0, version in Loki) and crash loop (`up=0`, crash log in Loki),
   validation, conflicts, no mechanism names in Loki. `status_becomes()` polls past the first requests after a
   redeploy (stale keep-alive/DNS).
+- `tests/faults/test_proxy_faults.py` (8 tests), M8: nginx→gateway latency invisible to the gateway's
+  own metrics, bandwidth limit (slow 201, revert via reload), rate limit (503 + delay), harmless release,
+  validation.
+- `tests/experiments/test_challenges.py` (10 tests, ~10 min), M8: catalog tags; each same-symptom scenario
+  with shortened phases (p95 > 2 s, < 10% errors, `evidence_matched`, recovered; model-breaking: all
+  domains NORMAL + slow requests in nginx logs); misleading correlation with `time_scale 0.1`: rollback
+  (removing the deploy fault) leaves orders > 2 s, onset ≈ the real cause, deploy ≥ 20 s earlier.
+  `make test-challenges` runs only this file.
 - Loki checks for leaked names exclude `service="tests"`: pytest output of a failed run is shipped too.
 - `tests/experiments/test_experiments.py` (9 tests, ~50s), M7: scenarios valid, full lifecycle on
   payment-latency with shortened phases (`overrides`): phase order/timestamps, ground truth linked to the
@@ -37,7 +45,7 @@
   payment-error; one-at-a-time 409 + abort during observe removes faults; 409 with an active ad-hoc fault;
   422s; runner invisible in Loki/Prometheus. The autouse `clean` fixture aborts running experiments and
   removes faults.
-- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments).
+- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 113 tests, ~13 min (run long batches under `caffeinate -i` on a laptop).
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
   (redeploy not repeated: same container id and label; netem qdisc still there; recover restores the

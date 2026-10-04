@@ -67,12 +67,20 @@ def summary(experiment: dict) -> str:
         if phase in results:
             r = results[phase]
             lines.append(f"{phase:9s} p50={r['p50_s']:.3f}s p95={r['p95_s']:.3f}s errors={r['error_ratio']:.0%}"
-                         f" 401={r['auth_error_ratio']:.0%} rps={r['rps']}")
+                         f" 401={r['auth_error_ratio']:.0%} rps={r['rps']}"
+                         + (f" skipped={r['skipped']}" if r.get("skipped") else ""))
+    status = (experiment.get("domains") or {}).get("status")
+    if status:
+        lines.append("domains:  " + "  ".join(
+            f"{domain}={view['status']}" + (f"({','.join(view['signals'])})" if view["signals"] else "")
+            for domain, view in status.items()))
+    if experiment.get("incident"):
+        lines.append(f"incident: onset={experiment['incident']['start']} symptoms={experiment['incident']['symptoms']}")
     verdict = experiment.get("verdict")
     if verdict:
         lines.append(f"verdict: expected={verdict['expected']} observed={verdict['observed'] or ['none']}"
                      f" expected_seen={verdict['expected_symptom_seen']} recovered={verdict['recovered']}"
-                     f" recovery_seconds={verdict['recovery_seconds']}")
+                     f" recovery_seconds={verdict['recovery_seconds']} evidence_matched={verdict.get('evidence_matched')}")
     return "\n".join(lines) + "\n"
 
 
@@ -88,7 +96,7 @@ async def list_scenarios(format: Literal["json", "text"] = "json"):
     for scenario in scenarios.values():
         problems = []
         for spec in scenario.faults:
-            ok, detail = await app.state.runner.injector.validate(spec.model_dump(exclude_none=True))
+            ok, detail = await app.state.runner.injector.validate(spec.request())
             if not ok:
                 problems.append({"fault": spec.type, "detail": detail})
         listed.append({**scenario.model_dump(), "valid": not problems, "errors": problems})
@@ -120,7 +128,7 @@ async def create_experiment(request: ExperimentRequest, wait: bool = False,
         if active:  # a polluted baseline would make the experiment meaningless
             raise HTTPException(409, f"{len(active)} fault(s) already active; run `make recover` first")
         for spec in scenario.faults:
-            ok, detail = await runner.injector.validate(spec.model_dump(exclude_none=True))
+            ok, detail = await runner.injector.validate(spec.request())
             if not ok:
                 raise HTTPException(422, {"fault": spec.type, "detail": detail})
         experiment = runner.start(scenario)

@@ -20,7 +20,7 @@ USERS = [("alice", "alice"), ("bob", "bob")]
 @dataclass(frozen=True)
 class Sample:
     at: float  # wall clock, comparable with Prometheus timestamps
-    kind: str  # create_order | get_order | bad_login
+    kind: str  # create_order | get_order | bad_login | skipped (max_in_flight reached, nothing sent)
     status: int  # 0 = transport error (no HTTP response)
     seconds: float
 
@@ -32,8 +32,9 @@ def _quantile(values: list[float], q: float) -> float:
 
 
 def summarize(samples: list[Sample]) -> dict:
-    """Stats of order requests (create + get)."""
-    orders = [s for s in samples if s.kind != "bad_login"]
+    """Stats of order requests (create + get); `skipped` counts ticks the capped client couldn't send."""
+    skipped = sum(s.kind == "skipped" for s in samples)
+    orders = [s for s in samples if s.kind not in ("bad_login", "skipped")]
     latencies = [s.seconds for s in orders]
     count = len(orders)
     span = (orders[-1].at - orders[0].at) if count > 1 else 0.0
@@ -45,14 +46,16 @@ def summarize(samples: list[Sample]) -> dict:
         "p99_s": round(_quantile(latencies, 0.99), 4),
         "error_ratio": round(sum(s.status >= 500 or s.status == 0 for s in orders) / count, 4) if count else 0.0,
         "auth_error_ratio": round(sum(s.status == 401 for s in orders) / count, 4) if count else 0.0,
+        "skipped": skipped,
         "statuses": dict(sorted(Counter(f"{s.kind} {s.status or 'transport_error'}" for s in orders).items())),
     }
 
 
 class Traffic:
-    def __init__(self, base_url: str, rate: float):
+    def __init__(self, base_url: str, rate: float, max_in_flight: int | None = None):
         self.base_url = base_url
         self.rate = rate
+        self.max_in_flight = max_in_flight
         self.samples: list[Sample] = []
         self._inflight: dict[int, float] = {}  # request key -> wall-clock start
         self._task: asyncio.Task | None = None
@@ -90,9 +93,12 @@ class Traffic:
         next_tick = time.monotonic()
         try:
             while True:
-                task = asyncio.create_task(self._one(tokens, order_ids))
-                pending.add(task)
-                task.add_done_callback(pending.discard)
+                if self.max_in_flight and len(pending) >= self.max_in_flight:
+                    self.samples.append(Sample(time.time(), "skipped", -1, 0.0))
+                else:
+                    task = asyncio.create_task(self._one(tokens, order_ids))
+                    pending.add(task)
+                    task.add_done_callback(pending.discard)
                 next_tick += interval
                 await asyncio.sleep(max(0.0, next_tick - time.monotonic()))
         finally:

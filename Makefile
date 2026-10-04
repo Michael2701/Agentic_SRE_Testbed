@@ -7,7 +7,7 @@ PARAMS ?= {}
 PRETTY := python3 -m json.tool
 comma := ,
 
-.PHONY: up down test test-faults test-experiments load fault faults recover experiment experiments scenarios logs ps
+.PHONY: up down test test-faults test-experiments test-challenges load fault faults recover experiment experiments scenarios logs ps
 
 up: ## Build and start the whole environment, wait until healthy
 	$(COMPOSE) up -d --build --wait
@@ -26,6 +26,9 @@ test-faults: ## Run only the fault injection tests (~3 min)
 
 test-experiments: ## Run only the experiment tests (~3 min)
 	$(COMPOSE) --profile test run --rm --build tests pytest -v -p no:cacheprovider experiments
+
+test-challenges: ## Run only the M8 challenge scenario tests (~10 min)
+	$(COMPOSE) --profile test run --rm --build tests pytest -v -p no:cacheprovider experiments/test_challenges.py
 
 fault: ## Inject a fault: make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' [TARGET=payment] [EXP=exp-1]
 	@test -n "$(TYPE)" || { echo "TYPE is required, e.g. payment-latency, network-latency, bad-deployment (all types: README, Fault injection)"; exit 2; }
