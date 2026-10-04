@@ -1,0 +1,37 @@
+{
+  "name": "slow-redis",
+  "description": "Redis stalls 2.5 s out of every 3 s.",
+  "tags": [
+    "same-symptom"
+  ],
+  "faults": [
+    {
+      "type": "redis_latency",
+      "parameters": {
+        "pause_ms": 2500,
+        "interval_ms": 3000
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "redis"
+    ],
+    "normal_domains": [
+      "application",
+      "database",
+      "payment"
+    ]
+  }
+}

@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 APP_SERVICES = frozenset({"gateway", "auth", "order", "payment"})
 FAULTPOINT_SERVICES = frozenset({"auth", "order", "payment"})  # services with the libs/faultpoint hook
-NETWORK_SERVICES = APP_SERVICES | {"postgres", "redis"}
-Service = Literal["gateway", "auth", "order", "payment", "postgres", "redis"]
+NETWORK_SERVICES = APP_SERVICES | {"postgres", "redis", "nginx"}
+Service = Literal["gateway", "auth", "order", "payment", "postgres", "redis", "nginx"]
 
 # Env variable holding the endpoint of each dependency, per client service (incorrect_endpoint).
 DEPENDENCY_ENV = {
@@ -51,7 +51,7 @@ class IntermittentErrorsParams(_Params):
 
 
 class CpuSaturationParams(_Params):
-    workers: int = Field(default=2, ge=1, le=8)
+    workers: int = Field(default=2, ge=1, le=32)
 
 
 class MemoryPressureParams(_Params):
@@ -117,9 +117,22 @@ class BadConfigurationParams(_Params):
 
 class BadDeploymentParams(_Params):
     version: str = Field(default="1.1.0", pattern=r"^[0-9A-Za-z._-]{1,32}$")
-    defect: Literal["crash", "errors", "slow"] = "errors"
+    defect: Literal["crash", "errors", "slow", "none"] = "errors"  # none: a harmless release (a decoy)
     error_rate: float = Field(default=0.5, gt=0, le=1)
     latency_ms: int = Field(default=800, ge=1, le=30_000)
+
+
+class ProxyRateLimitParams(_Params):
+    """A too-strict nginx limit_req: requests over `rate_rps` queue (up to `burst`), the rest get 503."""
+
+    rate_rps: int = Field(default=8, ge=1, le=1000)
+    burst: int = Field(default=20, ge=0, le=10_000)
+
+
+class ProxyBandwidthLimitParams(_Params):
+    """nginx `limit_rate` per response, e.g. a "100" typed instead of "100k": slow responses, no errors."""
+
+    bytes_per_second: int = Field(default=100, ge=1, le=10_000_000)
 
 
 @dataclass(frozen=True)
@@ -134,6 +147,7 @@ class FaultType:
     # pg_lock         periodic LOCK TABLE orders     redis_pause      periodic CLIENT PAUSE
     # netns           tc netem / iptables in the target's network namespace (network.py)
     # redeploy        container recreated with a changed env/command, like a new release (deploy.py)
+    # edge_config     nginx config snippet pushed to the shared runtime dir + `nginx -s reload` (edge.py)
     mechanism: str
     default_target: str | None = None
 
@@ -165,6 +179,9 @@ FAULT_TYPES: dict[str, FaultType] = {
     "incorrect_timeout": FaultType(IncorrectTimeoutParams, frozenset({"gateway", "order"}), "redeploy"),
     "bad_configuration": FaultType(BadConfigurationParams, frozenset(CONFIG_SETTINGS), "redeploy"),
     "bad_deployment": FaultType(BadDeploymentParams, FAULTPOINT_SERVICES, "redeploy"),
+    # M8
+    "proxy_rate_limit": FaultType(ProxyRateLimitParams, _single("nginx"), "edge_config", "nginx"),
+    "proxy_bandwidth_limit": FaultType(ProxyBandwidthLimitParams, _single("nginx"), "edge_config", "nginx"),
 }
 
 CONTAINER_MECHANISMS = frozenset({"container_stop", "container_pause", "redeploy"})

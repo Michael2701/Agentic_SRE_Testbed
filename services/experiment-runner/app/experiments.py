@@ -22,8 +22,89 @@ PHASES = ("baseline", "inject", "observe", "record", "remove", "recovery")
 ORDERS = 'job="gateway",route="/orders",method="POST"'
 
 
+# What the dashboards show per domain (the proxy has no latency metrics: only nginx logs and traces do).
+# name -> (PromQL with $R = range, kind): latency = p95 seconds, ratio = share of time/requests, up = 0/1.
+_P95 = "histogram_quantile(0.95, sum by (le) (rate({metric}_bucket{{{sel}}}[$R])))"
+DOMAIN_SIGNALS = {
+    "application": {
+        "cpu_throttled": ('max(rate(container_cpu_throttled_seconds_total{job=~"gateway|auth|order"}[$R]))', "ratio"),
+        "own_500_ratio": ('(sum(rate(http_requests_total{job=~"gateway|auth|order",status="500"}[$R])) or vector(0))'
+                          ' / sum(rate(http_requests_total{job=~"gateway|auth|order"}[$R]))', "ratio"),
+    },
+    "database": {
+        "query_p95": (_P95.format(metric="dependency_request_duration_seconds", sel='job="order",dependency="postgres"'),
+                      "latency"),
+        "up": ("min_over_time(pg_up[$R])", "up"),
+    },
+    "redis": {
+        "command_p95": (_P95.format(metric="dependency_request_duration_seconds", sel='job="auth",dependency="redis"'),
+                        "latency"),
+        "up": ("min_over_time(redis_up[$R])", "up"),
+    },
+    "payment": {
+        "server_p95": (_P95.format(metric="http_request_duration_seconds", sel='job="payment",route="/payments"'),
+                       "latency"),
+        "client_p95": (_P95.format(metric="dependency_request_duration_seconds", sel='job="order",dependency="payment"'),
+                       "latency"),
+        "5xx_ratio": ('(sum(rate(http_requests_total{job="payment",status=~"5.."}[$R])) or vector(0))'
+                      ' / sum(rate(http_requests_total{job="payment"}[$R]))', "ratio"),
+    },
+}
+
+
+def _signal_degraded(kind: str, base: float | None, value: float | None) -> bool:
+    if value is None:
+        return False  # no data (e.g. no traffic reached it) is not evidence of degradation
+    base = base or 0.0
+    if kind == "latency":
+        return value >= max(2 * base, base + 0.05)
+    if kind == "ratio":
+        return value >= base + 0.2 if base < 1 else False
+    return value < 1  # up
+
+
+def judge_domains(domains: dict) -> None:
+    """Adds NORMAL/DEGRADED per domain to the observe view (baseline is the reference)."""
+    status = {}
+    for domain, queries in DOMAIN_SIGNALS.items():
+        degraded = [name for name, (_, kind) in queries.items()
+                    if _signal_degraded(kind, domains["baseline"][domain][name], domains["observe"][domain][name])]
+        status[domain] = {"status": "DEGRADED" if degraded else "NORMAL", "signals": degraded}
+    domains["status"] = status
+
+
+def evidence_matched(scenario: Scenario, status: dict) -> bool | None:
+    """Whether the per-domain view matches the scenario's expected evidence (None: nothing expected)."""
+    evidence = scenario.evidence
+    if not evidence.degraded_domains and not evidence.normal_domains:
+        return None
+    return (all(status[d]["status"] == "DEGRADED" for d in evidence.degraded_domains)
+            and all(status[d]["status"] == "NORMAL" for d in evidence.normal_domains))
+
+
 class ExperimentError(Exception):
     pass
+
+
+def incident_onset(traffic: Traffic, baseline: dict, start: float, end: float, window: float) -> float | None:
+    """Start of the first window with symptoms: when the incident became visible, not when faults went in."""
+    slow = max(2 * baseline["p95_s"], baseline["p95_s"] + 0.05)
+    at = start
+    while at + window <= end:
+        samples = traffic.window(at, at + window)
+        found = symptoms(baseline, summarize(samples))
+        if found:
+            # The first request in that window that shows one of the symptoms (precise to one request).
+            for sample in samples:
+                if sample.kind in ("bad_login", "skipped"):
+                    continue
+                if (("slow" in found and sample.seconds >= slow)
+                        or ("errors" in found and (sample.status >= 500 or sample.status == 0))
+                        or ("auth_errors" in found and sample.status == 401)):
+                    return sample.at
+            return at
+        at += window / 2  # half-overlapping windows
+    return None
 
 
 def symptoms(baseline: dict, window: dict) -> list[str]:
@@ -90,7 +171,7 @@ class Runner:
         experiment = self.store.create({
             "scenario": scenario.name, "spec": scenario.model_dump(), "phase": None, "error": None,
             "ground_truth": {"faults": []}, "incident": None, "phases": [], "results": {}, "telemetry": {},
-            "verdict": None,
+            "domains": {}, "verdict": None,
         })
         self.task = asyncio.create_task(self._run(experiment, scenario))
         return experiment
@@ -116,7 +197,7 @@ class Runner:
 
     async def _run(self, experiment: dict, scenario: Scenario) -> None:
         durations = scenario.durations
-        traffic = Traffic(self.base_url, scenario.traffic.rate)
+        traffic = Traffic(self.base_url, scenario.traffic.rate, scenario.traffic.max_in_flight)
         try:
             baseline_start = self._enter(experiment, "baseline")
             async with httpx.AsyncClient(base_url=self.base_url, timeout=5) as http:
@@ -126,23 +207,33 @@ class Runner:
             await asyncio.sleep(durations.baseline_s)
 
             inject_start = self._enter(experiment, "inject")
-            for spec in scenario.faults:
-                fault = await self.injector.inject(spec.model_dump(exclude_none=True), experiment["id"])
-                experiment["ground_truth"]["faults"].append(
-                    {key: fault[key] for key in ("id", "type", "target", "parameters", "created_at")})
-                self.store.save(experiment)
+            timeline = sorted(scenario.faults, key=lambda spec: spec.at_s)
+            while timeline and timeline[0].at_s == 0:
+                await self._inject(experiment, timeline.pop(0))
 
             observe_start = self._enter(experiment, "observe")
-            await asyncio.sleep(durations.observe_s)
+            observe_end = observe_start + durations.observe_s
+            for spec in timeline:  # later faults of a timeline (e.g. the real cause after a decoy deployment)
+                await asyncio.sleep(max(0.0, inject_start + spec.at_s - time.time()))
+                await self._inject(experiment, spec)
+            await asyncio.sleep(max(0.0, observe_end - time.time()))
 
-            observe_end = self._enter(experiment, "record")
+            self._enter(experiment, "record")
             await traffic.settle(observe_end)
             baseline = summarize(traffic.window(baseline_start, inject_start))
-            observed = summarize(traffic.window(observe_start, observe_end))
+            onset = incident_onset(traffic, baseline, observe_start, observe_end, durations.recovery_window_s)
+            symptomatic_from = onset if onset is not None else observe_start
+            observed = summarize(traffic.window(symptomatic_from, observe_end))
             found = symptoms(baseline, observed)
-            experiment["results"] = {"baseline": baseline, "observe": observed}
-            experiment["incident"] = {"start": iso(inject_start), "end": None, "entry_point": "nginx /orders",
-                                      "symptoms": found}
+            experiment["results"] = {"baseline": baseline, "observe": observed,
+                                     "observe_full": summarize(traffic.window(observe_start, observe_end))}
+            experiment["incident"] = {"start": iso(onset) if onset is not None else None, "end": None,
+                                      "entry_point": "nginx /orders", "symptoms": found}
+            experiment["domains"] = {
+                "baseline": await self._domains(inject_start - baseline_start, inject_start),
+                "observe": await self._domains(observe_end - symptomatic_from, observe_end),
+            }
+            judge_domains(experiment["domains"])
 
             self._enter(experiment, "remove")
             await self._remove_faults(experiment)
@@ -161,6 +252,7 @@ class Runner:
                 "expected_symptom_seen": (not found) if scenario.expect == "none" else scenario.expect in found,
                 "recovered": recovery["recovered"],
                 "recovery_seconds": recovery["recovery_seconds"],
+                "evidence_matched": evidence_matched(scenario, experiment["domains"]["status"]),
             }
             experiment.update(state="completed", phase=None)
         except asyncio.CancelledError:
@@ -173,6 +265,20 @@ class Runner:
         finally:
             await traffic.stop()
             self.store.save(experiment)
+
+    async def _inject(self, experiment: dict, spec) -> None:
+        fault = await self.injector.inject(spec.request(), experiment["id"])
+        experiment["ground_truth"]["faults"].append(
+            {key: fault[key] for key in ("id", "type", "target", "parameters", "created_at")})
+        self.store.save(experiment)
+
+    async def _domains(self, seconds: float, at: float) -> dict:
+        """Per-domain signals the dashboards show (Prometheus), over the `seconds` before `at`."""
+        rng = f"{max(15, round(seconds))}s"
+        signals = {}
+        for domain, queries in DOMAIN_SIGNALS.items():
+            signals[domain] = {name: await self._query(expr.replace("$R", rng), at) for name, (expr, _) in queries.items()}
+        return signals
 
     async def _remove_faults(self, experiment: dict) -> None:
         for fault in experiment["ground_truth"]["faults"]:

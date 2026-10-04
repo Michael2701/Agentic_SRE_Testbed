@@ -23,6 +23,7 @@ services:
       - "${NGINX_PORT:-8080}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - edgeconf:/etc/nginx/runtime:ro
     depends_on:
       gateway:
         condition: service_healthy
@@ -78,6 +79,7 @@ services:
       <<: *otel-env
       DATABASE_URL: postgresql://order_svc:order_svc@postgres:5432/${POSTGRES_DB:-orders}
       PAYMENT_URL: http://payment:8000
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-30}  # sized for ~10 rps with slow writes; 37 non-superuser slots
       HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
     depends_on:
       db-migrate:
@@ -154,6 +156,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     volumes:
       - faultdata:/data
+      - edgeconf:/edge
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck: *python-healthcheck
     networks: [backend]
@@ -300,3 +303,4 @@ volumes:
   pgdata:
   faultdata:
   experimentdata:
+  edgeconf:

@@ -37,7 +37,9 @@ class InstrumentedTransport(httpx.AsyncBaseTransport):
 
     def __init__(self, dependency: str):
         self.dependency = dependency
-        self._inner = httpx.AsyncHTTPTransport()
+        # Keep every pooled connection alive (httpx keeps only 20 idle by default): under a slow dependency the
+        # concurrency exceeds 20 and the churn would add a TCP handshake per request.
+        self._inner = httpx.AsyncHTTPTransport(limits=httpx.Limits(max_connections=100, max_keepalive_connections=100))
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         request_id = get_request_id()

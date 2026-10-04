@@ -1,0 +1,44 @@
+{
+  "name": "deploy-then-payment",
+  "description": "A harmless order release, then 5 minutes later the payment simulator slows down.",
+  "tags": [
+    "misleading-correlation"
+  ],
+  "faults": [
+    {
+      "type": "bad_deployment",
+      "target": "order",
+      "parameters": {
+        "version": "1.1.0",
+        "defect": "none"
+      }
+    },
+    {
+      "type": "payment_latency",
+      "parameters": {
+        "latency_ms": 2500
+      },
+      "at_s": 300
+    }
+  ],
+  "traffic": {
+    "rate": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 360,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "payment"
+    ],
+    "normal_domains": [
+      "application",
+      "database",
+      "redis"
+    ]
+  }
+}

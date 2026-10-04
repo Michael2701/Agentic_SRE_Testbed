@@ -1,0 +1,36 @@
+{
+  "name": "slow-payment",
+  "description": "Payment simulator answers in 2.5 s.",
+  "tags": [
+    "same-symptom"
+  ],
+  "faults": [
+    {
+      "type": "payment_latency",
+      "parameters": {
+        "latency_ms": 2500
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [
+      "payment"
+    ],
+    "normal_domains": [
+      "application",
+      "database",
+      "redis"
+    ]
+  }
+}

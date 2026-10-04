@@ -1,0 +1,36 @@
+{
+  "name": "slow-proxy-config",
+  "description": "nginx limits response bandwidth to a few bytes per second (a missing 'k').",
+  "tags": [
+    "same-symptom",
+    "model-breaking"
+  ],
+  "faults": [
+    {
+      "type": "proxy_bandwidth_limit",
+      "parameters": {
+        "bytes_per_second": 200
+      }
+    }
+  ],
+  "traffic": {
+    "rate": 10,
+    "max_in_flight": 10
+  },
+  "durations": {
+    "baseline_s": 30,
+    "observe_s": 60,
+    "recovery_window_s": 10,
+    "recovery_timeout_s": 120
+  },
+  "expect": "slow",
+  "evidence": {
+    "degraded_domains": [],
+    "normal_domains": [
+      "application",
+      "database",
+      "redis",
+      "payment"
+    ]
+  }
+}

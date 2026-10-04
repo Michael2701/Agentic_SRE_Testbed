@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     reconcile_interval_seconds: float = 2.0
     healthy_timeout_seconds: float = 60.0
+    edge_dir: str = "/edge"  # shared with nginx (/etc/nginx/runtime, read-only there)
 
 
 settings = Settings()

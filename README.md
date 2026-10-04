@@ -3,9 +3,11 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 7 — experiment framework.** Reproducible experiments run a scenario end to
-end (baseline → inject → observe → record → remove → verify recovery) under generated traffic and store the
-hidden ground truth. They build on a Fault Injector with 19 controlled, reversible faults: CPU, memory,
+**Current state: Milestone 8 — diagnostic challenge scenarios.** Deliberately hard scenarios: eight
+different causes with one identical symptom, a misleading deployment before the real cause, and
+"model-breaking" incidents where every dashboard domain looks normal. Reproducible experiments run a
+scenario end to end (baseline → inject → observe → record → remove → verify recovery) under generated
+traffic and store the hidden ground truth. They build on a Fault Injector with 19 controlled, reversible faults: CPU, memory,
 database, Redis, dependencies (M5), network, configuration and deployments (M6). Different root causes
 produce similar external symptoms. Built on M3 tracing (OpenTelemetry → Tempo) and M2 observability
 (JSON logs, request IDs, Prometheus, Loki, Grafana).
@@ -65,7 +67,8 @@ make test-faults   # only the fault tests (~5 min)
 make scenarios                           # list experiment scenarios
 make experiment SCENARIO=payment-latency # run one experiment (~75s) and print the verdict
 make experiments                         # recorded experiments, with ground truth
-make test-experiments                    # only the experiment tests (~1 min)
+make test-experiments                    # only the experiment tests (~12 min, incl. challenges)
+make test-challenges                     # only the M8 challenge scenarios (~10 min)
 make ps     # container status
 make logs   # follow logs
 make down   # stop the environment
@@ -255,6 +258,20 @@ and the verdict. Only one experiment runs at a time, and none starts while fault
 Starter scenarios: payment-latency, payment-error, db-slow-query, redis-unavailable, network-latency,
 cpu-saturation, connection-failure, bad-deployment. See `docs/kb/experiments.md`.
 
+### Challenge scenarios (M8)
+
+| Type | Scenarios | What makes it hard |
+|---|---|---|
+| Same symptom | slow-payment, slow-db-query, slow-pool-exhaustion, slow-redis, slow-cpu, slow-network, slow-proxy-network, slow-proxy-config | all give POST /orders p95 > 2 s with 201s at the same traffic; only the evidence differs |
+| Misleading correlation | deploy-then-payment | a harmless order release, then 5 minutes later payment slows down; rolling back the release changes nothing |
+| Model-breaking | slow-proxy-network, slow-proxy-config | application, database, Redis and payment all look NORMAL; the delay is in nginx, visible only in its logs and traces |
+
+Each record also carries a per-domain view (application, database, redis, payment: NORMAL/DEGRADED from
+Prometheus), the incident onset (when symptoms began, not when faults went in) and whether the view
+matched the evidence the scenario declares. Proxy faults: `network_latency`/`packet_loss` with target
+`nginx`, `proxy_bandwidth_limit` and `proxy_rate_limit` (nginx config snippets + reload). See
+`docs/kb/challenges.md`.
+
 ## API
 
 Public (via nginx, `http://localhost:8080`):
@@ -306,6 +323,9 @@ Tests run inside the compose network:
 - `tests/experiments/test_experiments.py` covers M7: the full lifecycle with shortened phases, ground truth
   linked to the injector's faults, an incident record without the cause, one experiment at a time, abort,
   and the runner staying invisible to the telemetry stack.
+- `tests/experiments/test_challenges.py` covers M8: every challenge scenario end to end (shared symptom,
+  per-domain evidence, model-breaking domains all NORMAL, rollback not fixing the misleading incident).
+- `tests/faults/test_proxy_faults.py` covers the proxy faults and the harmless release.
 - `tests/faults/test_faults.py` runs after the integration tests and recovers after each test. It covers:
   - the fault API (lifecycle, validation, conflicts, delete-all);
   - the incident and the recovery for each fault type (service_unavailable for payment, auth and order);

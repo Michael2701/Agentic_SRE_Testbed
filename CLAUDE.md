@@ -25,8 +25,9 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 4 | Fault injection foundation | ✅ done (main `9468b10`) | [faults.md](docs/kb/faults.md) |
 | 5 | Advanced faults | ✅ done (main `7277d08`) | [faults.md](docs/kb/faults.md) |
 | 6 | Infrastructure faults | ✅ done (main `97f2d6b`) | [faults.md](docs/kb/faults.md) |
-| 7 | Experiment framework | ✅ implemented on `feature/m7-experiments`, awaiting PRs → develop → main | [experiments.md](docs/kb/experiments.md) |
-| 8–9 | Diagnostic challenge scenarios → stabilization | not started | `project.md` |
+| 7 | Experiment framework | ✅ done (main `d1db57d`) | [experiments.md](docs/kb/experiments.md) |
+| 8 | Diagnostic challenge scenarios | ✅ implemented on `feature/m8-challenges`, awaiting PRs → develop → main | [challenges.md](docs/kb/challenges.md) |
+| 9 | Stage 0 stabilization | not started | `project.md` |
 
 ## Topics
 
@@ -38,6 +39,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | [tracing.md](docs/kb/tracing.md) | traces, Tempo, nginx otel module, span attributes, log↔trace links, service map |
 | [faults.md](docs/kb/faults.md) | fault injector, all fault types + mechanisms (netns helper, redeploy), **control-plane isolation rule**, symptom→cause table, faultpoint, adding faults |
 | [experiments.md](docs/kb/experiments.md) | experiment-runner, scenario files, lifecycle, ground truth vs incident, verdicts, `make experiment` |
+| [challenges.md](docs/kb/challenges.md) | M8 scenarios (same-symptom, misleading, model-breaking), calibration, domain view, onset, proxy faults |
 | [auth.md](docs/kb/auth.md) | login, tokens, Redis, gateway auth validation |
 | [orders.md](docs/kb/orders.md) | order flow, payment simulator, PostgreSQL schema |
 | [testing.md](docs/kb/testing.md) | running/writing tests, manual checks, DB/Redis inspection |

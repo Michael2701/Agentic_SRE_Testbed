@@ -58,7 +58,8 @@ async def reconcile_loop(reconciler: Reconciler) -> None:
 async def lifespan(app: FastAPI):
     docker = Docker(settings.docker_socket, settings.compose_project)
     postgres = Postgres(settings.admin_database_url, settings.reporting_database_url)
-    app.state.reconciler = Reconciler(docker, store, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds)
+    app.state.reconciler = Reconciler(docker, store, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds,
+                                      settings.edge_dir)
     task = asyncio.create_task(reconcile_loop(app.state.reconciler))
     yield
     task.cancel()
