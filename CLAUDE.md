@@ -27,7 +27,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 6 | Infrastructure faults | ✅ done (main `97f2d6b`) | [faults.md](docs/kb/faults.md) |
 | 7 | Experiment framework | ✅ done (main `d1db57d`) | [experiments.md](docs/kb/experiments.md) |
 | 8 | Diagnostic challenge scenarios | ✅ done (main `94ff75b`) | [challenges.md](docs/kb/challenges.md) |
-| 9 | Stage 0 stabilization | 🚧 in progress on `feature/m9-stabilization` | [stage0.md](docs/kb/stage0.md) |
+| 9 | Stage 0 stabilization | ✅ done (main `68e42fc`) — **Stage 0 complete** | [stage0.md](docs/kb/stage0.md) |
 
 ## Topics
 

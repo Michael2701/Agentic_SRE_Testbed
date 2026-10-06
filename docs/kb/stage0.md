@@ -54,9 +54,8 @@ and the acceptance results.
 - M8 commit: slow-cpu 14 → 16 workers (superseded by the above).
 
 ## Status (2026-10-06)
-Final verification done on `feature/m9-stabilization` (uncommitted): `make reset` (smoke ok), `make test` ×2
-(136 passed each, ~14 min each), `make acceptance ROUNDS=2` (below). Remaining: commit (on request) → PRs →
-after the main merge: CLAUDE.md M9 ✅.
+Done: merged into main (`68e42fc`, PRs #13, #14). Final verification: `make reset` (smoke ok), `make test` ×2
+(136 passed each, ~14 min each), `make acceptance ROUNDS=2` (below). Stage 0 is complete.
 
 ## Acceptance results
 `make acceptance ROUNDS=2`, 2026-10-06, this Mac, short phases: **17 scenarios × 2 rounds, 0 failed, identical
