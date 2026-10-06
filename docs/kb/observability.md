@@ -40,7 +40,7 @@
   label; query it with `|= "<id>"` or `| json | request_id="..."`.
 - Grafana 12.1 (host :3000, anonymous Admin, login form off). Datasource uids are `prometheus` and
   `loki`. Dashboards are in `grafana/dashboards/*.json` with uids `sre-overview`, `sre-dependencies`,
-  `sre-logs`, folder "SRE Testbed". The home dashboard is Service Overview.
+  `sre-logs`, `sre-traces`, `sre-domains`, folder "SRE Testbed". The home dashboard is Service Overview.
 - Exporters: nginx-exporter (→ `nginx:8081/stub_status`, internal server block), postgres-exporter,
   redis-exporter.
 - **cAdvisor was removed** (it can't map cgroups on Docker Desktop's containerd store). **Since M5,
@@ -58,6 +58,8 @@
   `python3 grafana/generate_dashboards.py`, and commit both. Don't hand-edit `grafana/dashboards/*.json`.
   Keep to one unit per panel (no dual axes), stat tiles for headlines, green/yellow/red only for thresholds.
   All dashboards are tagged `sre-testbed` and linked to each other via the tag link.
+- *Diagnostic domains* (`sre-domains`, M9) repeats `DOMAIN_SIGNALS` from the runner's `experiments.py` with
+  `[1m]`: keep them in sync. No proxy domain on purpose (model-breaking scenarios).
 - Error panels use `... or <same grouping> * 0` / `or vector(0)` so healthy = 0 rather than "No data".
 - To check that panels have data: evaluate each target `expr` against Prometheus
   (`localhost:9090/api/v1/query`) and Loki (via `localhost:3000/api/datasources/proxy/uid/loki/...`).

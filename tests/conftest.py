@@ -70,6 +70,11 @@ def place_order(client, token, request_id: str | None = None) -> tuple[httpx.Res
     return response, time.monotonic() - start
 
 
+def status_becomes(client, token, status: int, timeout: float = 20) -> bool:
+    """After a redeploy callers may briefly hit the old address (keep-alive, nginx DNS TTL)."""
+    return eventually(lambda: place_order(client, token)[0].status_code == status, timeout=timeout, interval=0.5)
+
+
 def sample(client, token, n: int, spacing: float = 0.25) -> list[tuple[int, float]]:
     """Requests spread over time (periodic faults hold resources only part of the time)."""
     results = []

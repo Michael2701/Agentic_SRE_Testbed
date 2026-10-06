@@ -26,8 +26,8 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 5 | Advanced faults | ✅ done (main `7277d08`) | [faults.md](docs/kb/faults.md) |
 | 6 | Infrastructure faults | ✅ done (main `97f2d6b`) | [faults.md](docs/kb/faults.md) |
 | 7 | Experiment framework | ✅ done (main `d1db57d`) | [experiments.md](docs/kb/experiments.md) |
-| 8 | Diagnostic challenge scenarios | ✅ implemented on `feature/m8-challenges`, awaiting PRs → develop → main | [challenges.md](docs/kb/challenges.md) |
-| 9 | Stage 0 stabilization | not started | `project.md` |
+| 8 | Diagnostic challenge scenarios | ✅ done (main `94ff75b`) | [challenges.md](docs/kb/challenges.md) |
+| 9 | Stage 0 stabilization | 🚧 in progress on `feature/m9-stabilization` | [stage0.md](docs/kb/stage0.md) |
 
 ## Topics
 
@@ -40,6 +40,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | [faults.md](docs/kb/faults.md) | fault injector, all fault types + mechanisms (netns helper, redeploy), **control-plane isolation rule**, symptom→cause table, faultpoint, adding faults |
 | [experiments.md](docs/kb/experiments.md) | experiment-runner, scenario files, lifecycle, ground truth vs incident, verdicts, `make experiment` |
 | [challenges.md](docs/kb/challenges.md) | M8 scenarios (same-symptom, misleading, model-breaking), calibration, domain view, onset, proxy faults |
+| [stage0.md](docs/kb/stage0.md) | M9: `make reset`/`smoke`/`acceptance`, recovery sweep, gotchas it found (nginx mount, burst=0, domain margin), acceptance results |
 | [auth.md](docs/kb/auth.md) | login, tokens, Redis, gateway auth validation |
 | [orders.md](docs/kb/orders.md) | order flow, payment simulator, PostgreSQL schema |
 | [testing.md](docs/kb/testing.md) | running/writing tests, manual checks, DB/Redis inspection |

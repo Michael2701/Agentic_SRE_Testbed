@@ -19,10 +19,13 @@ x-app-limits: &app-limits
 services:
   nginx:
     image: nginx:1.27-alpine-otel
+    # The directory, not the file, is mounted: a single-file bind mount keeps the old inode when git or an
+    # editor replaces nginx.conf on the host, and `nginx -s reload` (proxy faults) then fails.
+    command: ["nginx", "-c", "/etc/nginx/testbed/nginx.conf", "-g", "daemon off;"]
     ports:
       - "${NGINX_PORT:-8080}:80"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx:/etc/nginx/testbed:ro
       - edgeconf:/etc/nginx/runtime:ro
     depends_on:
       gateway:
