@@ -68,6 +68,7 @@ GOOD_WARN_BAD = lambda warn, bad: [
 
 # ---------------------------------------------------------------- Service Overview
 _ids = itertools.count(1)
+ORDERS_SEL = 'job="gateway",method="POST",route="/orders"'
 p95_orders = ('histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket'
               '{job="gateway",method="POST",route="/orders"}[1m])))')
 overview = [
@@ -231,7 +232,49 @@ traces = [
        12, 22, unit="s"),
 ]
 
+# ---------------------------------------------------------------- Diagnostic domains
+# The same signals as DOMAIN_SIGNALS in services/experiment-runner/app/experiments.py (keep them in sync):
+# what the runner judges NORMAL/DEGRADED per domain. There is deliberately no proxy (nginx) domain: the
+# model-breaking scenarios rely on the proxy being invisible here (only nginx logs and traces show it).
+_ids = itertools.count(1)
+p95 = lambda metric, sel: f"histogram_quantile(0.95, sum by (le) (rate({metric}_bucket{{{sel}}}[1m])))"
+CORE = 'job=~"gateway|auth|order"'
+UP = [{"color": "red", "value": None}, {"color": "green", "value": 1}]
+domains = [
+    row("Symptom (POST /orders at the gateway)", 0),
+    stat("p95", p95_orders, 0, 1, w=12, unit="s", thresholds=GOOD_WARN_BAD(0.5, 2)),
+    stat("5xx ratio", f'(sum(rate(http_requests_total{{{ORDERS_SEL},status=~"5.."}}[1m])) or vector(0)) / '
+                      f'clamp_min(sum(rate(http_requests_total{{{ORDERS_SEL}}}[1m])), 1e-9)',
+         12, 1, w=12, unit="percentunit", thresholds=GOOD_WARN_BAD(0.01, 0.05)),
+    row("Application (gateway, auth, order)", 5),
+    ts("CPU throttled (max over services)", [(f'max(rate(container_cpu_throttled_seconds_total{{{CORE}}}[1m]))', "throttled")],
+       0, 6, unit="percentunit", soft_max=1, desc="DEGRADED at +0.2 over the baseline."),
+    ts("Own 500 ratio", [(f'(sum(rate(http_requests_total{{{CORE},status="500"}}[1m])) or vector(0)) / '
+                          f'sum(rate(http_requests_total{{{CORE}}}[1m]))', "500 ratio")],
+       12, 6, unit="percentunit", soft_max=1,
+       desc="Errors the services raise themselves (not 502/504 relayed from a dependency). DEGRADED at +0.2."),
+    row("Database (PostgreSQL, from order)", 14),
+    ts("Query p95 (client side)", [(p95("dependency_request_duration_seconds", 'job="order",dependency="postgres"'), "p95")],
+       0, 15, w=16, unit="s", desc="Includes waiting for a pool connection. DEGRADED at 2x the baseline (min +50 ms)."),
+    stat("Postgres up", "min_over_time(pg_up[1m])", 16, 15, w=8, h=8, decimals=0, thresholds=UP),
+    row("Redis (from auth)", 23),
+    ts("Command p95 (client side)", [(p95("dependency_request_duration_seconds", 'job="auth",dependency="redis"'), "p95")],
+       0, 24, w=16, unit="s", desc="DEGRADED at 2x the baseline (min +50 ms)."),
+    stat("Redis up", "min_over_time(redis_up[1m])", 16, 24, w=8, h=8, decimals=0, thresholds=UP),
+    row("Payment", 32),
+    ts("p95: server vs client", [
+        (p95("http_request_duration_seconds", 'job="payment",route="/payments"'), "server (payment itself)"),
+        (p95("dependency_request_duration_seconds", 'job="order",dependency="payment"'), "client (order -> payment)")],
+       0, 33, w=16, unit="s",
+       desc="A gap between client and server latency points at the network or the caller, not at payment."),
+    ts("5xx ratio", [('(sum(rate(http_requests_total{job="payment",status=~"5.."}[1m])) or vector(0)) / '
+                      'sum(rate(http_requests_total{job="payment"}[1m]))', "5xx")],
+       16, 33, w=8, unit="percentunit", soft_max=1),
+]
+
 dashboards = {
+    "domains.json": dashboard("sre-domains", "Diagnostic domains", domains,
+                              "The per-domain signals the experiment-runner judges NORMAL/DEGRADED (no proxy domain)."),
     "service-overview.json": dashboard("sre-overview", "Service Overview", overview,
                                        "RED metrics, order-flow latency, business counters and process resources."),
     "dependencies.json": dashboard("sre-dependencies", "Dependencies", dep,

@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS baselines (
     cmd     TEXT NOT NULL,
     restart TEXT NOT NULL
 );
+-- CPU quota (NanoCpus) of a container as compose created it, saved before cpu_limit lowers it (limits.py).
+CREATE TABLE IF NOT EXISTS cpu_baselines (
+    service   TEXT PRIMARY KEY,
+    nano_cpus INTEGER NOT NULL
+);
 """
 
 
@@ -83,3 +88,13 @@ class FaultStore:
 
     def delete_baseline(self, service: str) -> None:
         self._db.execute("DELETE FROM baselines WHERE service = ?", (service,))
+
+    def save_cpu_baseline(self, service: str, nano_cpus: int) -> None:
+        self._db.execute("INSERT OR IGNORE INTO cpu_baselines VALUES (?, ?)", (service, nano_cpus))
+
+    def cpu_baseline(self, service: str) -> int | None:
+        row = self._db.execute("SELECT nano_cpus FROM cpu_baselines WHERE service = ?", (service,)).fetchone()
+        return row["nano_cpus"] if row else None
+
+    def delete_cpu_baseline(self, service: str) -> None:
+        self._db.execute("DELETE FROM cpu_baselines WHERE service = ?", (service,))

@@ -14,6 +14,7 @@ from app.datastores import Postgres, Redis
 from app.deploy import Deployer
 from app.docker_api import Docker
 from app.edge import Edge
+from app.limits import CpuLimits
 from app.network import Network
 from app.store import FaultStore
 from app.workers import Workers
@@ -63,6 +64,7 @@ class Reconciler:
         self.network = Network(docker)
         self.deployer = Deployer(docker, store, healthy_timeout)
         self.edge = Edge(docker, edge_dir)
+        self.cpu_limits = CpuLimits(docker, store)
         self.healthy_timeout = healthy_timeout
         self._http = httpx.AsyncClient(timeout=3)
         self._tasks: dict[str, asyncio.Task] = {}
@@ -94,6 +96,8 @@ class Reconciler:
                 await self.postgres.ensure_slow_trigger(fault["parameters"]["delay_ms"], fault["parameters"]["operations"])
             elif kind == "netns":
                 await self.network.ensure(fault)
+            elif kind == "cpu_quota":
+                await self.cpu_limits.ensure(fault)
             elif kind in BACKGROUND_MECHANISMS:
                 self._ensure_task(fault)
         await self.edge.ensure(active)
@@ -145,6 +149,8 @@ class Reconciler:
             await self.deployer.restore(target)
         elif kind == "netns":
             await self.network.clear(fault)
+        elif kind == "cpu_quota":
+            await self.cpu_limits.restore(target)
         elif kind == "edge_config":
             await self.edge.ensure(still_active)
         elif kind in ("exec_cpu", "exec_memory"):

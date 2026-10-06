@@ -7,7 +7,7 @@ PARAMS ?= {}
 PRETTY := python3 -m json.tool
 comma := ,
 
-.PHONY: up down test test-faults test-experiments test-challenges load fault faults recover experiment experiments scenarios logs ps
+.PHONY: up down reset smoke acceptance test test-faults test-experiments test-challenges load fault faults recover experiment experiments scenarios logs ps
 
 up: ## Build and start the whole environment, wait until healthy
 	$(COMPOSE) up -d --build --wait
@@ -17,6 +17,18 @@ up: ## Build and start the whole environment, wait until healthy
 
 down: ## Stop the environment
 	$(COMPOSE) down
+
+reset: ## Clean slate: revert faults, delete all state (DB, fault/experiment history, telemetry), start again
+	-@curl -s --max-time 120 -XDELETE $(FAULTS_URL)/faults > /dev/null
+	$(COMPOSE) --profile test down -v --remove-orphans
+	$(MAKE) up
+	@python3 scripts/smoke.py
+
+smoke: ## Quick health check of the running environment (~5 s)
+	@python3 scripts/smoke.py
+
+acceptance: ## Run every scenario end to end: make acceptance [FULL=1] [ROUNDS=2] [SCENARIOS="slow-cpu slow-redis"]
+	@python3 scripts/acceptance.py $(if $(FULL),--full) --rounds $(or $(ROUNDS),1) $(SCENARIOS)
 
 test: ## Run all tests (integration, then faults) against the running environment
 	$(COMPOSE) --profile test run --rm --build tests

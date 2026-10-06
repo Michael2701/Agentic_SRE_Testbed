@@ -67,6 +67,10 @@ class Docker:
             await self._post(f"/containers/{container['Id']}/start", f"start {service}")
         await self.wait_healthy(service, timeout)
 
+    async def update_cpus(self, service: str, nano_cpus: int) -> None:
+        container = await self.container(service)
+        await self._post(f"/containers/{container['Id']}/update", f"update {service}", json={"NanoCpus": nano_cpus})
+
     async def wait_healthy(self, service: str, timeout: float) -> None:
         deadline = time.monotonic() + timeout
         while True:

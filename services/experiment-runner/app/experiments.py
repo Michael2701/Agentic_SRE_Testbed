@@ -52,12 +52,17 @@ DOMAIN_SIGNALS = {
 }
 
 
+DOMAIN_MIN_LATENCY_S = 0.2
+
+
 def _signal_degraded(kind: str, base: float | None, value: float | None) -> bool:
     if value is None:
         return False  # no data (e.g. no traffic reached it) is not evidence of degradation
     base = base or 0.0
     if kind == "latency":
-        return value >= max(2 * base, base + 0.05)
+        # +200 ms, not the symptom's +50 ms: a bursty dependency (redis unpausing releases queued requests at
+        # once) lifts the other edges' p95 by ~50 ms; every intended domain fault adds >= 300 ms.
+        return value >= max(2 * base, base + DOMAIN_MIN_LATENCY_S)
     if kind == "ratio":
         return value >= base + 0.2 if base < 1 else False
     return value < 1  # up
@@ -207,15 +212,16 @@ class Runner:
             await asyncio.sleep(durations.baseline_s)
 
             inject_start = self._enter(experiment, "inject")
+            baseline_range = (baseline_start, inject_start)
             timeline = sorted(scenario.faults, key=lambda spec: spec.at_s)
             while timeline and timeline[0].at_s == 0:
-                await self._inject(experiment, timeline.pop(0))
+                await self._inject(experiment, timeline.pop(0), baseline_range, scenario.traffic.rate)
 
             observe_start = self._enter(experiment, "observe")
             observe_end = observe_start + durations.observe_s
             for spec in timeline:  # later faults of a timeline (e.g. the real cause after a decoy deployment)
                 await asyncio.sleep(max(0.0, inject_start + spec.at_s - time.time()))
-                await self._inject(experiment, spec)
+                await self._inject(experiment, spec, baseline_range, scenario.traffic.rate)
             await asyncio.sleep(max(0.0, observe_end - time.time()))
 
             self._enter(experiment, "record")
@@ -266,11 +272,26 @@ class Runner:
             await traffic.stop()
             self.store.save(experiment)
 
-    async def _inject(self, experiment: dict, spec) -> None:
-        fault = await self.injector.inject(spec.request(), experiment["id"])
+    async def _inject(self, experiment: dict, spec, baseline_range: tuple[float, float], rate: float) -> None:
+        parameters = await self._calibrate(spec, *baseline_range, rate)
+        fault = await self.injector.inject(spec.request(parameters), experiment["id"])
         experiment["ground_truth"]["faults"].append(
             {key: fault[key] for key in ("id", "type", "target", "parameters", "created_at")})
         self.store.save(experiment)
+
+    async def _calibrate(self, spec, start: float, end: float, rate: float) -> dict:
+        """Parameters of `baseline_relative`: the CPU the target needs to serve the scenario's request rate,
+        measured as CPU seconds per request during the baseline (a ratio, so idle seconds at the edge of a short
+        window don't skew it), times the rate, times the factor."""
+        if not spec.baseline_relative:
+            return {}
+        rng, job = f"{max(15, round(end - start))}s", f'job="{spec.target}"'
+        expr = (f"sum(increase(container_cpu_usage_seconds_total{{{job}}}[{rng}]))"
+                f" / sum(increase(http_requests_total{{{job}}}[{rng}]))")
+        per_request = await self._query(expr, end)
+        if not per_request:
+            raise ExperimentError(f"no baseline CPU usage of {spec.target} to calibrate against")
+        return {"cpus": max(0.01, round(spec.baseline_relative["cpus"] * per_request * rate, 3))}
 
     async def _domains(self, seconds: float, at: float) -> dict:
         """Per-domain signals the dashboards show (Prometheus), over the `seconds` before `at`."""

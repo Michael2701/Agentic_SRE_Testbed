@@ -79,4 +79,4 @@ def test_grafana_provisioned():
         assert health.status_code == 200, (uid, health.text)
 
     dashboards = {d["uid"] for d in httpx.get(f"{GRAFANA_URL}/api/search", params={"type": "dash-db"}).json()}
-    assert {"sre-overview", "sre-dependencies", "sre-logs"} <= dashboards
+    assert {"sre-overview", "sre-dependencies", "sre-logs", "sre-domains"} <= dashboards

@@ -49,6 +49,7 @@ symptoms**:
 | `redis_unavailable` | redis | — | `docker stop` | start + wait healthy |
 | `dependency_timeout` | auth, order, payment | — | `docker pause` (TCP accepted, no reply → caller read timeout) | unpause + wait healthy |
 | `cpu_saturation` | gateway, auth, order, payment | `workers` 1–8 (=2) | busy-loop python processes via docker exec | kill pids |
+| `cpu_limit` (M9) | gateway, auth, order, payment | `cpus` 0.01–4 (=0.1) | `POST /containers/{id}/update {NanoCpus}` (= `docker update --cpus`), in place, no restart; compose quota saved in table `cpu_baselines` (`limits.py`) | update back to the saved quota |
 | `memory_pressure` | same | `mb` 16–2048 (=200) | a python process allocating and touching `mb` MiB | kill pid |
 | `db_slow_query` | postgres | `delay_ms`, `operations` ⊆ {insert, update} | `BEFORE` trigger `orders_write_hook` with `pg_sleep` | drop trigger + function |
 | `db_connection_exhaustion` | postgres | — | role `reporting` (non-superuser) fills every normal slot; `pg_terminate_backend` evicts `order_svc` | close connections |
@@ -79,7 +80,8 @@ symptoms**:
 
 ## M8 additions
 - `nginx` is a netns target; `proxy_bandwidth_limit` / `proxy_rate_limit` (mechanism `edge_config`,
-  `app/edge.py`: snippets in the shared volume `edgeconf` + `nginx -s reload`); `bad_deployment
+  `app/edge.py`: snippets in the shared volume `edgeconf` + `nginx -c /etc/nginx/testbed/nginx.conf -s reload`;
+  nginx's config *directory* is mounted, see stage0.md; `burst=0` is omitted because nginx rejects it); `bad_deployment
   defect=none` (harmless release). Details and conflicts: [challenges.md](challenges.md).
 - `cpu_saturation.workers` limit 8 → 32.
 
@@ -122,7 +124,7 @@ sees no label, takes a new baseline and redeploys the fault again.
    do heavy work when the fault is already in place); add `revert`. Long-running loops belong in
    `BACKGROUND_MECHANISMS` (supervised tasks).
 3. Use neutral names for anything visible to the diagnostic plane.
-4. Add symptom + evidence + recovery tests (`tests/faults/test_advanced_faults.py` pattern).
+4. Add a case to `tests/faults/test_recovery_sweep.py` (and bump its count) and symptom + evidence + recovery tests (`tests/faults/test_advanced_faults.py` pattern).
 5. Prefer real mechanisms (containers, network) over `sleep()` (`project.md` M6).
 
 ## Make targets
@@ -138,6 +140,7 @@ The host uses curl against `localhost:8090`.
 | | db_lock_contention | `pg_locks_count{mode="sharelock"}`; periodic spikes (hold/interval), not constant |
 | | redis_latency | auth→redis latency (auth `dependency_*{dependency="redis"}`); `/validate` slow |
 | | cpu_saturation(order) | `container_cpu_throttled_seconds_total`, CPU PSI of order |
+| | cpu_limit(order) | throttling + PSI like cpu_saturation, but `container_cpu_limit_cores` drops and no extra processes / CPU usage goes *down* |
 | 5xx | payment_error / intermittent_errors | 5xx at payment itself (its RED metrics); 502 from order |
 | | db_connection_exhaustion | **500** from order; `pg_stat_activity_count{usename="reporting"}` ≈ limit |
 | | redis_unavailable | 502 from gateway (auth 500 on validate); `redis_up`=0 |

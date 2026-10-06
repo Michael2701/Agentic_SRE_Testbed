@@ -22,7 +22,7 @@ fixed-latency causes p95 doesn't change; only their rps drops (to ~in-flight / l
 | slow-db-query | db_slow_query 1100 ms (insert+update) | database DEGRADED |
 | slow-pool-exhaustion | bad_configuration order pool 1..2 + db_slow_query 300 ms (Q1: B, a small pool with slightly slow queries, how pools really run dry) | database DEGRADED (pool wait is inside `pool.fetchrow`, so it counts as query latency) |
 | slow-redis | redis_latency pause 2500 / interval 3000 | redis DEGRADED |
-| slow-cpu | cpu_saturation order, 16 workers (14 gave p95 1.8–3.0 s, flaky against the 2 s threshold; 16 gives 3.7–4.0 s, 0 errors) | application DEGRADED (throttling); redis NORMAL. database/payment are *also* DEGRADED: a CPU-starved order inflates its own client-side timings of every dependency, a real diagnostic trap, so the evidence doesn't require them NORMAL |
+| slow-cpu | cpu_limit order, `baseline_relative: {cpus: 0.8}` (M9: the quota is computed per run, see stage0.md; cpu_saturation hogs were not reproducible) | application DEGRADED (throttling); redis NORMAL. database/payment are *also* DEGRADED: a CPU-starved order inflates its own client-side timings of every dependency, a real diagnostic trap, so the evidence doesn't require them NORMAL |
 | slow-network | network_latency order→payment 2100 ms | payment DEGRADED (client side only; payment server p95 normal) |
 | slow-proxy-network | network_latency nginx→gateway 1100 ms: paid twice, nginx opens a new upstream connection per request (SYN + request) | all four NORMAL (also model-breaking) |
 | slow-proxy-config | proxy_bandwidth_limit 200 B/s (nginx `limit_rate`, a missing "k") | all four NORMAL (also model-breaking) |
@@ -56,7 +56,7 @@ test checks exactly that.
   start of its first symptomatic request (not the window start: that was up to half a window early), not
   the injection time. `results.observe` covers onset → end; `results.observe_full` the whole phase.
 - `domains`: Prometheus signals per domain for baseline and observe (`DOMAIN_SIGNALS` in
-  `experiments.py`), judged NORMAL/DEGRADED (latency ≥ max(2×, +50 ms); ratio ≥ +0.2; up < 1; no data =
+  `experiments.py`), judged NORMAL/DEGRADED (latency ≥ max(2×, +200 ms), M9: +50 ms flaked on bursts; ratio ≥ +0.2; up < 1; no data =
   NORMAL). `verdict.evidence_matched` compares with the scenario's `evidence`.
   - application: max CPU throttling of gateway/auth/order, their own 500 ratio (not 502/504 which blame
     a dependency);

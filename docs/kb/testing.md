@@ -45,6 +45,10 @@
   payment-error; one-at-a-time 409 + abort during observe removes faults; 409 with an active ad-hoc fault;
   422s; runner invisible in Loki/Prometheus. The autouse `clean` fixture aborts running experiments and
   removes faults.
+- `tests/faults/test_recovery_sweep.py` (23 tests, ~1 min), M9: every fault type injected and removed; the
+  system returns to its pre-fault state (see stage0.md). Add a case when adding a fault type.
+- `status_becomes()` lives in conftest (moved from test_infra_faults in M9).
+- Host-side checks (not pytest, need the host's docker/ports): `make smoke`, `make acceptance` (stage0.md).
 - `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 113 tests, ~13 min (run long batches under `caffeinate -i` on a laptop).
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
@@ -54,8 +58,8 @@
   without a token or with an invalid token → 401.
 - `test_observability.py` (10 tests): request ID generated/preserved, `/metrics` per service
   (hits `http://<svc>:8000` directly), counter deltas, Prometheus targets == expected job set and all
-  up, one request_id in Loki for nginx+gateway+auth+order+payment, Grafana datasources healthy and 3
-  dashboards provisioned. Uses the `eventually()` helper, because telemetry is asynchronous (up to 45s).
+  up, one request_id in Loki for nginx+gateway+auth+order+payment, Grafana datasources healthy and 4
+  dashboards provisioned (incl. `sre-domains`). Uses the `eventually()` helper, because telemetry is asynchronous (up to 45s).
   When adding a scrape job, update `EXPECTED_JOBS`.
 - `test_tracing.py` (6 tests): the module fixture `order_trace` places an order, reads `X-Trace-ID` and
   polls Tempo until spans from all 5 services exist. It checks a single nginx root, the parent chain
