@@ -1,15 +1,15 @@
 {
   "name": "slow-cpu",
-  "description": "CPU hogs saturate the order container's quota.",
+  "description": "The order container's CPU limit is lowered at runtime to a fraction of what it used before.",
   "tags": [
     "same-symptom"
   ],
   "faults": [
     {
-      "type": "cpu_saturation",
+      "type": "cpu_limit",
       "target": "order",
-      "parameters": {
-        "workers": 16
+      "baseline_relative": {
+        "cpus": 0.8
       }
     }
   ],

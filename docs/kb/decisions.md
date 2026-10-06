@@ -66,4 +66,10 @@ Newest last. Format: milestone: decision (reason).
 - M8: the runner's per-domain view deliberately excludes the proxy: it models what the dashboards cover,
   which is what model-breaking scenarios exploit.
 - M8: order pool 30 and httpx keepalive 100 as the baseline (realistic sizing; see challenges.md).
+- M9: `make reset` = recover + `down -v` + up + smoke (not a pytest test: it would tear down its own container).
+- M9: acceptance is a host script over the runner API, not pytest: long, sequential, a table for humans.
+- M9: domain latency margin +200 ms (symptom stays +50 ms): bursts lift unrelated edges by ~50 ms.
+- M9: slow-cpu = `cpu_limit` + runner-side `baseline_relative` calibration (user's choice over relaxing the
+  criteria or dropping the scenario): fixed CPU fault sizes are neither reproducible nor portable.
+- M9: nginx config directory mount + `-c` instead of a file mount (inode gotcha, see stage0.md).
 - M6: incorrect_timeout default 5ms: 20ms produced no errors at 20 rps (latent), 5ms clips the tail (~6% 504).

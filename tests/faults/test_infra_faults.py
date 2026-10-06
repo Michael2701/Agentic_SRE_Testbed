@@ -12,7 +12,7 @@ import pytest
 
 from conftest import (
     DEMO_USER, ORDER_METRICS, PAYMENT_METRICS, eventually, five_xx_ratio, inject, loki_streams, median_latency,
-    metric_value, place_order, prom_value, sample,
+    metric_value, place_order, prom_value, sample, status_becomes,
 )
 
 pytestmark = pytest.mark.usefixtures("recover_after")
@@ -36,11 +36,6 @@ def wait_up(url: str, timeout: float = 60) -> None:
 
 def start_time(metrics_url: str) -> float:
     return metric_value(metrics(metrics_url), "process_start_time_seconds")
-
-
-def status_becomes(client, token, status: int, timeout: float = 20) -> bool:
-    """After a redeploy callers may briefly hit the old address (keep-alive, nginx DNS TTL)."""
-    return eventually(lambda: place_order(client, token)[0].status_code == status, timeout=timeout, interval=0.5)
 
 
 # ---------------------------------------------------------------- network namespace (tc / iptables)

@@ -21,10 +21,23 @@ class FaultSpec(_Model):
     target: str | None = None
     parameters: dict = Field(default_factory=dict)
     at_s: float = Field(default=0, ge=0, le=3600)  # offset from the start of the inject phase (M8 timelines)
+    # Parameters computed at inject time from what the target used during the baseline, so the fault has the
+    # same effect on a faster or slower host (M9). Only {"cpus": f}: f x the CPU the target needs for the
+    # scenario's request rate (CPU per request in the baseline x rate).
+    baseline_relative: dict[Literal["cpus"], float] | None = None
 
-    def request(self) -> dict:
-        """The body for the injector (the offset is the runner's business)."""
-        return self.model_dump(exclude_none=True, exclude={"at_s"})
+    @model_validator(mode="after")
+    def _relative_fits(self):
+        if self.baseline_relative and (self.target is None or any(f <= 0 for f in self.baseline_relative.values())):
+            raise ValueError("baseline_relative needs an explicit target and positive factors")
+        return self
+
+    def request(self, parameters: dict | None = None) -> dict:
+        """The body for the injector (offset and calibration are the runner's business)."""
+        body = self.model_dump(exclude_none=True, exclude={"at_s", "baseline_relative"})
+        if parameters:
+            body["parameters"] = {**body["parameters"], **parameters}
+        return body
 
 
 class Traffic(_Model):

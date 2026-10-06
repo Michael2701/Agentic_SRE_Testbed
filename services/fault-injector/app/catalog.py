@@ -54,6 +54,12 @@ class CpuSaturationParams(_Params):
     workers: int = Field(default=2, ge=1, le=32)
 
 
+class CpuLimitParams(_Params):
+    """The container's CPU quota lowered at runtime (`docker update --cpus`), e.g. a limit typed as 0.1, not 1."""
+
+    cpus: float = Field(default=0.1, ge=0.01, le=4)
+
+
 class MemoryPressureParams(_Params):
     mb: int = Field(default=200, ge=16, le=2048)
 
@@ -146,6 +152,7 @@ class FaultType:
     # pg_trigger      pg_sleep trigger on `orders`  pg_exhaustion    hold all normal connection slots
     # pg_lock         periodic LOCK TABLE orders     redis_pause      periodic CLIENT PAUSE
     # netns           tc netem / iptables in the target's network namespace (network.py)
+    # cpu_quota       the container's CPU quota changed in place (docker update), no restart (limits.py)
     # redeploy        container recreated with a changed env/command, like a new release (deploy.py)
     # edge_config     nginx config snippet pushed to the shared runtime dir + `nginx -s reload` (edge.py)
     mechanism: str
@@ -179,12 +186,15 @@ FAULT_TYPES: dict[str, FaultType] = {
     "incorrect_timeout": FaultType(IncorrectTimeoutParams, frozenset({"gateway", "order"}), "redeploy"),
     "bad_configuration": FaultType(BadConfigurationParams, frozenset(CONFIG_SETTINGS), "redeploy"),
     "bad_deployment": FaultType(BadDeploymentParams, FAULTPOINT_SERVICES, "redeploy"),
+    # M9
+    "cpu_limit": FaultType(CpuLimitParams, APP_SERVICES, "cpu_quota"),
     # M8
     "proxy_rate_limit": FaultType(ProxyRateLimitParams, _single("nginx"), "edge_config", "nginx"),
     "proxy_bandwidth_limit": FaultType(ProxyBandwidthLimitParams, _single("nginx"), "edge_config", "nginx"),
 }
 
-CONTAINER_MECHANISMS = frozenset({"container_stop", "container_pause", "redeploy"})
+# cpu_quota too: a redeploy copies the host config, so it would carry a lowered quota into the restored release.
+CONTAINER_MECHANISMS = frozenset({"container_stop", "container_pause", "redeploy", "cpu_quota"})
 BACKGROUND_MECHANISMS = frozenset({"pg_exhaustion", "pg_lock", "redis_pause"})
 
 
