@@ -3,7 +3,7 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Milestone 9 — Stage 0 stabilization** (see [Stage 0 status](#stage-0-status)): one-command
+**Current state: Stage 0 complete (Milestone 9 — Stage 0 stabilization)** (see [Stage 0 status](#stage-0-status)): one-command
 clean reset, a smoke check, an acceptance run of every scenario, a recovery sweep over every fault type and a
 per-domain dashboard. M8 added deliberately hard scenarios: eight
 different causes with one identical symptom, a misleading deployment before the real cause, and
