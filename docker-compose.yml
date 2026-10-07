@@ -211,7 +211,9 @@ services:
       - ./portal/conf.d:/etc/nginx/conf.d:ro
       - ./portal/html:/usr/share/nginx/html:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/portal-health"]
+      # The page itself, not a location from the config: a stale bind mount (directory replaced on the host,
+      # e.g. by a git checkout) leaves both the config and the files empty, and this check then fails.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 5s
       timeout: 3s
       retries: 10
