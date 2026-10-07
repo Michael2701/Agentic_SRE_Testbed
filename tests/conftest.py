@@ -13,6 +13,7 @@ GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://localhost:3000")
 TEMPO_URL = os.environ.get("TEMPO_URL", "http://localhost:3200")
 FAULT_INJECTOR_URL = os.environ.get("FAULT_INJECTOR_URL", "http://localhost:8090")
 EXPERIMENT_RUNNER_URL = os.environ.get("EXPERIMENT_RUNNER_URL", "http://localhost:8091")
+PORTAL_URL = os.environ.get("PORTAL_URL", "http://localhost:8000")
 READY_TIMEOUT_SECONDS = float(os.environ.get("READY_TIMEOUT_SECONDS", "60"))
 DEMO_USER = {"username": "alice", "password": "alice"}
 ORDER = {"item": "book", "quantity": 1, "amount_cents": 1500}

@@ -16,6 +16,7 @@ APP = f"http://localhost:{os.environ.get('NGINX_PORT', '8080')}"
 FAULTS = f"http://localhost:{os.environ.get('FAULT_INJECTOR_PORT', '8090')}"
 PROMETHEUS = f"http://localhost:{os.environ.get('PROMETHEUS_PORT', '9090')}"
 GRAFANA = f"http://localhost:{os.environ.get('GRAFANA_PORT', '3000')}"
+PORTAL = f"http://localhost:{os.environ.get('PORTAL_PORT', '8000')}"
 
 
 def call(url: str, body: dict | None = None, token: str | None = None) -> tuple[int, str]:
@@ -78,9 +79,17 @@ def check_tempo() -> str | None:
     return None if status == 200 else f"tempo {status}: {body[:200]}"
 
 
+def check_portal() -> str | None:
+    paths = ["/", "/grafana/api/health", "/prometheus/-/ready", "/faults/health", "/experiments/health",
+             "/app/nginx-health"]
+    failed = [f"{path} {status}" for path in paths if (status := call(PORTAL + path)[0]) != 200]
+    return ", ".join(failed) if failed else None
+
+
 CHECKS = [("app: ready, login, order 201", check_app), ("no active faults", check_faults),
           ("no leftover redeploy containers", check_containers), ("prometheus targets up", check_targets),
-          ("loki reachable", check_loki), ("tempo reachable", check_tempo)]
+          ("loki reachable", check_loki), ("tempo reachable", check_tempo),
+          (f"portal {PORTAL}: every tool reachable", check_portal)]
 
 
 def main() -> int:

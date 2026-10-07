@@ -61,7 +61,25 @@ async def lifespan(app: FastAPI):
     await injector.aclose()
 
 
+class ForwardedPrefix:
+    """Behind the portal (http://localhost:8000/<prefix>/) the prefix is stripped and sent as X-Forwarded-Prefix;
+    as root_path it makes Swagger UI load its OpenAPI document (and "Try it out" call) under that prefix."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            prefix = dict(scope["headers"]).get(b"x-forwarded-prefix", b"").decode("latin-1")
+            if prefix.startswith("/") and prefix.isascii():
+                prefix = prefix.rstrip("/")  # ASGI: `path` includes `root_path` (routing strips it again)
+                scope = {**scope, "root_path": prefix, "path": prefix + scope["path"],
+                         "raw_path": prefix.encode() + scope.get("raw_path", scope["path"].encode())}
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="experiment-runner", lifespan=lifespan)
+app.add_middleware(ForwardedPrefix)
 
 
 class ExperimentRequest(BaseModel):
