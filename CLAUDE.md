@@ -34,7 +34,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 
 | File | Read when… |
 |---|---|
-| [architecture.md](docs/kb/architecture.md) | touching compose topology, ports, networks, service graph |
+| [architecture.md](docs/kb/architecture.md) | touching compose topology, ports, networks, service graph, the **portal / Control Center** UI (`portal/`) |
 | [conventions.md](docs/kb/conventions.md) | writing or changing any service code (structure, config, clients, health, errors, deps) |
 | [observability.md](docs/kb/observability.md) | logs, request IDs, metrics, `libs/observability`, Prometheus/Loki/Alloy/Grafana, dashboards, `make load` |
 | [tracing.md](docs/kb/tracing.md) | traces, Tempo, nginx otel module, span attributes, log↔trace links, service map |

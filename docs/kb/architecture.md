@@ -22,6 +22,9 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
   (`ForwardedPrefix` middleware: `path` includes it, as ASGI expects — otherwise `/faults/faults` 404s).
   Upstreams resolve per request (resolver + variables), so the portal survives recreated containers.
   Control plane: no access log, Alloy drops it; never in front of the app (the app's nginx logs are evidence).
+  Editing: files under `portal/html/` are live on reload (served `no-cache`, no build); a `conf.d` change needs
+  `docker compose exec portal nginx -s reload`. UI strings are English (shown to people). Browser checks:
+  headless Chrome via `playwright-core` (not in `make test`).
 - Single network `backend`. Published ports: nginx `${NGINX_PORT:-8080}` (all interfaces); on 127.0.0.1 only
   (M10): Grafana `${GRAFANA_PORT:-3000}` (anonymous Admin), Prometheus `${PROMETHEUS_PORT:-9090}`
   (remote-write receiver on), fault-injector `127.0.0.1:${FAULT_INJECTOR_PORT:-8090}` (control
