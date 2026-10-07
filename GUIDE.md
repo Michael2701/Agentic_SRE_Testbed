@@ -735,6 +735,7 @@ make up
 | 502 несколько секунд после редеплой-фолта | нормально (старые соединения и DNS), подождите |
 | `make up` долго ждёт | Loki и Tempo после старта ~15 с отвечают «not ready», это нормально |
 | `nginx reload failed` у прокси-фолтов | nginx должен видеть актуальный `nginx/nginx.conf` (монтируется каталог, а не файл); `make reset` |
+| `localhost:8000` → `404 Not Found` (страница nginx) | папку `portal/` пересоздали на диске (например, `git checkout` ветки без неё), и контейнер видит пустую старую папку: `docker compose up -d --force-recreate portal` |
 | `{"detail":"Not Found"}` в браузере | это API без главной страницы; работайте через http://localhost:8000 |
 | Grafana на `:3000` открывается без стилей | UI Grafana открывайте через портал: http://localhost:8000/grafana/ |
 | порт занят | поменяйте его в `.env` (раздел 13) |
