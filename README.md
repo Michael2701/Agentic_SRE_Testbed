@@ -3,7 +3,8 @@
 A small, production-like distributed system that will later be broken in controlled,
 reproducible ways to train and evaluate a multi-agent SRE system. See `project.md` for the full roadmap.
 
-**Current state: Stage 0 complete (Milestone 9 — Stage 0 stabilization)** (see [Stage 0 status](#stage-0-status)): one-command
+**Current state: Stage 0 complete (M9), hardened after a full code review (M10), operated from one UI — the
+[Control Center](#usage) at `http://localhost:8000`** (see [Stage 0 status](#stage-0-status)): one-command
 clean reset, a smoke check, an acceptance run of every scenario, a recovery sweep over every fault type and a
 per-domain dashboard. M8 added deliberately hard scenarios: eight
 different causes with one identical symptom, a misleading deployment before the real cause, and
@@ -42,14 +43,16 @@ Observability stack:
 
 | Component | Role | Host port |
 |---|---|---|
-| Prometheus | Scrapes app `/metrics` and exporters every 5s | `9090` |
+| Prometheus | Scrapes app `/metrics` and exporters every 5s | `127.0.0.1:9090` (UI: Control Center `/prometheus/`) |
 | Loki | Log storage | — |
 | Tempo | Trace storage (OTLP), service graph + span metrics → Prometheus | — |
 | Grafana Alloy | Tails container logs via the Docker socket, parses JSON, ships to Loki | — |
-| Grafana | Provisioned datasources + dashboards, anonymous admin | `3000` |
+| Grafana | Provisioned datasources + dashboards, anonymous admin | `127.0.0.1:3000` (API; UI: Control Center `/grafana/`) |
 | nginx / postgres / redis exporters | Infrastructure metrics | — |
 
-Everything else lives on the internal `backend` network.
+Control plane: fault-injector (`127.0.0.1:8090`), experiment-runner (`127.0.0.1:8091`) and the portal serving
+the Control Center (`127.0.0.1:8000`); none of them is visible to the telemetry stack. Everything else lives
+on the internal `backend` network.
 
 **Full user guide (in Russian): [GUIDE.md](GUIDE.md)** — from setup to experiments, step by step.
 
@@ -126,9 +129,9 @@ curl -s localhost:8080/orders/<order-id> -H "Authorization: Bearer $TOKEN"
   `ts, level, service, logger, msg, request_id` plus event fields. Examples are `order_created`,
   `payment_approved`, `login_failed` and `dependency_call_failed`, plus one `request` access line per
   request. Probe and scrape paths (`/health`, `/ready`, `/metrics`) are not logged.
-- **Request ID:** nginx keeps a client `X-Request-ID` or generates one. Every service propagates it on
-  outbound calls and returns it in the response. To follow a request, open the **Logs** dashboard and
-  paste the ID, or query Loki with `{service=~".+"} |= "<id>"`.
+- **Request ID:** nginx keeps a well-formed client `X-Request-ID` or generates one. Every service propagates it
+  on outbound calls and returns it in the response. To follow a request, paste the ID into Control Center →
+  *Logs & traces*, or query Loki with `{service=~".+"} |= "<id>"`.
 - **Metrics:** each app service exposes `/metrics`:
   - `http_requests_total{method,route,status}` and `http_request_duration_seconds` (RED);
   - `dependency_requests_total{dependency,operation,outcome}` and `dependency_request_duration_seconds`
@@ -139,7 +142,7 @@ curl -s localhost:8080/orders/<order-id> -H "Authorization: Bearer $TOKEN"
     `version` log field and the `service.version` span resource attribute).
 
   The service name is the Prometheus `job` label.
-- **Dashboards** (Grafana → folder *SRE Testbed*):
+- **Dashboards** (Control Center → *Dashboards*, or `/grafana/` → folder *SRE Testbed*):
   - *Service Overview*: RED, order-flow latency, business counters, process and container resources (CPU, throttling, memory, PSI), releases (running version, process uptime);
   - *Dependencies*: every dependency edge, plus PostgreSQL (connections by role, locks) and Redis;
   - *Logs*: filter by service, level and request_id.
@@ -160,7 +163,8 @@ nginx (root) → gateway ─┬→ auth → Redis
                                   └→ payment
 ```
 
-- nginx (`ngx_otel_module`) starts the trace, propagates W3C `traceparent` and returns the trace ID in
+- nginx (`ngx_otel_module`) starts the trace (a client's `traceparent` is ignored), injects W3C `traceparent`
+  upstream and returns the trace ID in
   the `X-Trace-ID` response header.
 - Python services use OpenTelemetry auto-instrumentation for FastAPI, httpx, asyncpg and redis. Spans
   carry business attributes: `user.id`, `order.id`, `order.status`, `payment.id`.
@@ -174,7 +178,8 @@ curl -si -XPOST localhost:8080/orders -H "Authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' -d '{"item":"book","quantity":1,"amount_cents":1500}' | grep -i x-trace-id
 ```
 
-Then open Grafana → Explore → Tempo and paste the trace ID, or use the *Traces* dashboard.
+Then paste the trace ID into Control Center → *Logs & traces* (span waterfall next to the logs), or use
+`/grafana/` → Explore → Tempo, or the *Traces* dashboard.
 
 ## Fault injection
 
@@ -182,7 +187,8 @@ Then open Grafana → Explore → Tempo and paste the trace ID, or use the *Trac
 no metrics or traces, and its logs are not shipped to Loki. Services' internal fault hooks (`/__*`) are
 excluded from logs, metrics and traces, so diagnosis sees only symptoms.
 
-API (`http://localhost:8090`, bound to localhost only):
+In the browser: Control Center → *Faults* (form, active list, remove). API (`http://localhost:8090`, bound to
+localhost only; also `http://localhost:8000/faults/`, Swagger at `/faults/docs`):
 
 | Method | Path | Description |
 |---|---|---|
@@ -251,7 +257,8 @@ make recover
 
 ## Experiments
 
-`experiment-runner` (`http://localhost:8091`, localhost only) is control plane as well: it drives the
+In the browser: Control Center → *Experiments* (run, live phases and charts, verdict). `experiment-runner`
+(`http://localhost:8091`, localhost only; also `http://localhost:8000/experiments/`) is control plane as well: it drives the
 system only through the fault-injector API and nginx, and its logs and metrics never reach the telemetry
 stack. A scenario (`experiments/scenarios/<name>.json`) names the faults, traffic rate, phase durations and
 the expected symptom (`slow`, `errors`, `auth_errors` or `none`).
@@ -390,6 +397,9 @@ Tests run inside the compose network:
 - `tests/faults/test_proxy_faults.py` covers the proxy faults and the harmless release.
 - `tests/faults/test_recovery_sweep.py` covers M9: every one of the 22 fault types is injected and removed,
   and the system must return to its pre-fault state (orders 201 at baseline latency, same releases, same token TTL).
+- `tests/faults/test_combinations.py` covers M10: faults allowed together are enforceable and removable together.
+- `tests/integration/test_portal.py` covers the portal and Control Center: every tool by path, Swagger under its
+  prefix, assets served with no external URLs, the `/fault-types` catalog, no portal logs in Loki.
 - `tests/faults/test_faults.py` runs after the integration tests and recovers after each test. It covers:
   - the fault API (lifecycle, validation, conflicts, delete-all);
   - the incident and the recovery for each fault type (service_unavailable for payment, auth and order);
@@ -416,4 +426,6 @@ tests/experiments/        experiment tests (run last)
 tests/load.py             traffic generator (runs via `make load`)
 scripts/smoke.py          host-side health check (`make smoke`, also the last step of `make reset`)
 scripts/acceptance.py     host-side run of every scenario (`make acceptance`)
+portal/                   Control Center: nginx config (conf.d/) and the single-page app (html/, libs vendored in html/ui/vendor)
+GUIDE.md                  full user guide (Russian)
 ```
