@@ -51,6 +51,15 @@ Observability stack:
 
 Everything else lives on the internal `backend` network.
 
+**Full user guide (in Russian): [GUIDE.md](GUIDE.md)** — from setup to experiments, step by step.
+
+**One address for everything: http://localhost:8000** (`make open`) — the **Control Center**, one UI where
+everything happens in place: overview (KPIs, service map, domains), faults (catalog-driven form, active list,
+remove), experiments (run, live phases and charts, verdict, ground truth), logs and traces (request/trace id
+search, span waterfall), the Grafana dashboards embedded, and an *investigation mode* that hides the ground
+truth. Full tools stay on the same address (`/grafana/`, `/prometheus/`, `/faults/docs`, `/experiments/docs`).
+Clients of the app use `http://localhost:8080`.
+
 ## Requirements
 
 - Docker with Compose v2
@@ -60,6 +69,7 @@ Everything else lives on the internal `backend` network.
 
 ```bash
 make up     # build and start everything, waits until all containers are healthy
+make open   # open the Control Center (http://localhost:8000)
 make reset  # clean slate: revert faults, wipe all state (DB, fault/experiment history, telemetry), start, smoke
 make smoke  # ~5 s health check: order 201, no active faults, telemetry backends reachable
 make test   # all tests: integration, faults, experiments (in a container, through nginx; ~17 min)

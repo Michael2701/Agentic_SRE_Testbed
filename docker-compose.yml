@@ -200,6 +200,23 @@ services:
     healthcheck: *python-healthcheck
     networks: [backend]
 
+  # One address for every tool: http://localhost:${PORTAL_PORT:-8000} (start page + /grafana/, /prometheus/,
+  # /faults/, /experiments/, /app/). Control plane: no access log, Alloy drops it, never in front of the app.
+  portal:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORTAL_PORT:-8000}:80"
+    volumes:
+      - ./portal/conf.d:/etc/nginx/conf.d:ro
+      - ./portal/html:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/portal-health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
   # --- Observability (M2) ---------------------------------------------------
 
   prometheus:
@@ -209,6 +226,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
       - --web.enable-remote-write-receiver   # Tempo metrics-generator (service graph, span metrics)
+      # UI links for the portal (http://localhost:8000/prometheus/); the API still serves from the root.
+      - --web.external-url=http://localhost:${PORTAL_PORT:-8000}/prometheus/
+      - --web.route-prefix=/
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"  # remote-write receiver on: not for the LAN
     volumes:
@@ -270,6 +290,10 @@ services:
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/service-overview.json
+      # Links are built for the portal (http://localhost:8000/grafana/); it strips the prefix, so Grafana still
+      # serves from the root (grafana:3000 in the network). Open the UI through the portal.
+      GF_SERVER_ROOT_URL: http://localhost:${PORTAL_PORT:-8000}/grafana/
+      GF_SECURITY_ALLOW_EMBEDDING: "true"  # dashboards embedded in the portal's Control Center (same origin)
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
@@ -326,6 +350,7 @@ services:
       TEMPO_URL: http://tempo:3200
       FAULT_INJECTOR_URL: http://fault-injector:8000
       EXPERIMENT_RUNNER_URL: http://experiment-runner:8000
+      PORTAL_URL: http://portal
     depends_on:
       nginx:
         condition: service_healthy
@@ -336,6 +361,8 @@ services:
       fault-injector:
         condition: service_healthy
       experiment-runner:
+        condition: service_healthy
+      portal:
         condition: service_healthy
     networks: [backend]
 

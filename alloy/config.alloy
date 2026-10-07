@@ -16,9 +16,10 @@ discovery.relabel "compose" {
 
   // Control plane stays invisible to the diagnostic plane (ground truth must not leak into Loki). The test
   // runner and the migrations are not part of the system either: pytest output names faults and scenarios.
+  // The portal proxies to the control plane.
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "fault-injector|experiment-runner|tests|db-migrate"
+    regex         = "fault-injector|experiment-runner|portal|tests|db-migrate"
     action        = "drop"
   }
 

@@ -5,6 +5,23 @@ Observability services (prometheus, loki, alloy, grafana, exporters) are describ
 [observability.md](observability.md).
 
 - Compose project name `sre-testbed`; containers are `sre-testbed-<svc>-1`.
+- **Portal** (`portal/`, nginx-alpine, `127.0.0.1:${PORTAL_PORT:-8000}`): the one address for humans. `/` is
+  the **Control Center**, a static single-page app (`portal/html/`, Preact + htm and uPlot vendored in
+  `ui/vendor/`: no build step, works offline). Tabs: overview (Prometheus `query_range`/`query`, same signals
+  and thresholds as the runner's domains), faults (form generated from injector `GET /fault-types` = pydantic
+  JSON schemas + `per_target` hints), experiments (runner API; short run = acceptance's overrides), logs and
+  traces (Loki and Tempo through Grafana's datasource proxy, own span waterfall), dashboards (Grafana in a
+  kiosk iframe, `GF_SECURITY_ALLOW_EMBEDDING`). *Investigation mode* (localStorage) hides active faults,
+  scenario names and ground truth. Every tool also by path, prefix stripped:
+  `/grafana/`, `/prometheus/`, `/faults/`, `/experiments/`, `/app/` (→ the app's nginx). Paths, not
+  `*.localhost` subdomains: those don't resolve everywhere (Windows resolver, CLI tools). Grafana gets
+  `GF_SERVER_ROOT_URL=…/grafana/` and Prometheus `--web.external-url=…/prometheus/ --web.route-prefix=/`, so
+  their UI links carry the prefix while they still serve from the root in the network (datasources, runner,
+  Tempo remote-write, tests unchanged); Grafana's UI therefore works only through the portal (its API on
+  :3000 still does). FastAPI services (injector, runner, gateway) take `X-Forwarded-Prefix` as `root_path`
+  (`ForwardedPrefix` middleware: `path` includes it, as ASGI expects — otherwise `/faults/faults` 404s).
+  Upstreams resolve per request (resolver + variables), so the portal survives recreated containers.
+  Control plane: no access log, Alloy drops it; never in front of the app (the app's nginx logs are evidence).
 - Single network `backend`. Published ports: nginx `${NGINX_PORT:-8080}` (all interfaces); on 127.0.0.1 only
   (M10): Grafana `${GRAFANA_PORT:-3000}` (anonymous Admin), Prometheus `${PROMETHEUS_PORT:-9090}`
   (remote-write receiver on), fault-injector `127.0.0.1:${FAULT_INJECTOR_PORT:-8090}` (control

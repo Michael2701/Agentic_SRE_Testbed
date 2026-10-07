@@ -28,7 +28,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 7 | Experiment framework | ✅ done (main `d1db57d`) | [experiments.md](docs/kb/experiments.md) |
 | 8 | Diagnostic challenge scenarios | ✅ done (main `94ff75b`) | [challenges.md](docs/kb/challenges.md) |
 | 9 | Stage 0 stabilization | ✅ done (main `68e42fc`) — **Stage 0 complete** | [stage0.md](docs/kb/stage0.md) |
-| 10 | Review hardening (full code review fixes) | 🚧 in progress (`feature/m10-review-hardening`) | [review.md](docs/kb/review.md) |
+| 10 | Review hardening (full code review fixes) | ✅ done (main `6644614`) | [review.md](docs/kb/review.md) |
 
 ## Topics
 

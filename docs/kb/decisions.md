@@ -84,3 +84,11 @@ Newest last. Format: milestone: decision (reason).
   onset of deploy-then-payment.
 - M10: enforce reports errors per fault instead of failing the pass; a failed rollback keeps the fault
   `failed` + `needs_cleanup` (retried by DELETE) instead of a new state, so the SQLite CHECK stays as is.
+- Portal (after M10, user's request): one address `localhost:8000` with paths, not `*.localhost` subdomains
+  (not cross-platform: the user's requirement) and not routes on the app's nginx (would put control-plane
+  traffic into diagnostic logs/traces). Grafana/Prometheus prefix via root_url / external-url with the portal
+  stripping it, not serve-from-sub-path / route-prefix, so nothing in the network changes.
+- Control Center (user: "links to five systems isn't a portal"): one SPA in the portal instead of a page of
+  links. No build step (Preact + htm, uPlot vendored) so the repo needs no Node toolchain and works offline;
+  data straight from the existing APIs (Prometheus, Loki/Tempo via Grafana proxy, injector, runner) — the only
+  backend addition is `GET /fault-types` so forms follow the catalog instead of duplicating it.

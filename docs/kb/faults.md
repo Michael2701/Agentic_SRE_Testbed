@@ -22,6 +22,8 @@ symptoms**:
   `docker compose up -d --force-recreate alloy loki` (Loki has no volume, so this is a clean slate).
 - The experiment-runner (M7, [experiments.md](experiments.md)) is control plane too, under the same rules.
 - `POST /faults/validate` (M7): validates a spec and fills defaults without applying it.
+- `GET /fault-types`: the catalog for UIs (targets, parameter JSON schema with defaults/limits from the
+  pydantic models, `per_target` allowed settings/dependencies). The Control Center builds its form from it.
 
 ## Service `services/fault-injector` (control plane, host `127.0.0.1:8090`)
 - Built with context `./services/fault-injector`, **without** `libs/observability`. Plain JSON logs go to
