@@ -35,7 +35,7 @@ class NoParams(_Params):
 
 
 class PaymentLatencyParams(_Params):
-    latency_ms: int = Field(ge=1, le=30_000)
+    latency_ms: int = Field(default=2000, ge=1, le=30_000)
     jitter_ms: int = Field(default=0, ge=0, le=30_000)
     probability: float = Field(default=1.0, gt=0, le=1)
 

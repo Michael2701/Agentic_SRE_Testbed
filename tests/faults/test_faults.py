@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 from conftest import (
-    ORDER_METRICS, PAYMENT_METRICS, PROMETHEUS_URL, TEMPO_URL, eventually, inject, loki_streams, metric_value,
-    place_order,
+    ORDER_METRICS, PAYMENT_METRICS, PROMETHEUS_URL, TEMPO_URL, eventually, inject, loki_caught_up, loki_streams,
+    metric_value, place_order,
 )
 
 pytestmark = pytest.mark.usefixtures("recover_after")
@@ -51,7 +51,7 @@ def test_experiment_id_generated_when_missing(faults):
 
 @pytest.mark.parametrize("body", [
     {"type": "cosmic_rays"},
-    {"type": "payment_latency", "parameters": {}},
+    {"type": "payment_latency", "parameters": {"latency_ms": 30_001}},
     {"type": "payment_latency", "parameters": {"latency_ms": 0}},
     {"type": "payment_latency", "parameters": {"latency_ms": 100, "unknown": 1}},
     {"type": "payment_latency", "target": "auth", "parameters": {"latency_ms": 100}},
@@ -61,6 +61,12 @@ def test_experiment_id_generated_when_missing(faults):
 ])
 def test_invalid_faults_rejected(faults, body):
     assert faults.post("/faults", json=body).status_code == 422
+
+
+def test_payment_latency_default(faults):
+    """`make fault TYPE=payment-latency` (project.md) works without parameters."""
+    response = faults.post("/faults/validate", json={"type": "payment_latency"})
+    assert response.status_code == 200 and response.json()["parameters"]["latency_ms"] == 2000, response.text
 
 
 def test_delete_all(faults):
@@ -146,8 +152,8 @@ def test_reconcile_restores_lost_payment_config(faults):
 
 def test_control_plane_invisible_to_diagnostic_plane(faults, client, token):
     inject(faults, "payment_latency", latency_ms=20)
-    place_order(client, token)
-    time.sleep(3)  # let a reconcile pass and log shipping happen
+    time.sleep(2.5)  # a reconcile pass pushes the faultpoint config again
+    loki_caught_up(client, token)
 
     assert loki_streams('{service="fault-injector"}', since="1h") == []
     assert loki_streams('{service=~".+"} |= "__faults"', since="1h") == []

@@ -35,7 +35,9 @@ class ValidateResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.redis = redis.from_url(settings.redis_url, decode_responses=True)
+    app.state.redis = redis.from_url(settings.redis_url, decode_responses=True,
+                                     socket_timeout=settings.redis_timeout_seconds,
+                                     socket_connect_timeout=settings.redis_timeout_seconds)
     yield
     await app.state.redis.aclose()
 
@@ -57,7 +59,9 @@ def extract_bearer(authorization: str | None) -> str:
 @app.post("/login", response_model=LoginResponse)
 async def login(body: LoginRequest) -> LoginResponse:
     expected = settings.users.get(body.username)
-    if expected is None or not secrets.compare_digest(expected, body.password):
+    # Bytes (str compare_digest rejects non-ASCII), and a compare for unknown users too (no timing difference).
+    matches = secrets.compare_digest((expected or "").encode(), body.password.encode())
+    if expected is None or not matches:
         LOGINS.labels("failure").inc()
         logger.info("login_failed", extra={"username": body.username})
         raise HTTPException(status_code=401, detail="invalid credentials")

@@ -61,6 +61,9 @@ class InstrumentedTransport(httpx.AsyncBaseTransport):
         except Exception as exc:
             outcome, error = "error", repr(exc)
             raise
+        except BaseException as exc:  # asyncio.CancelledError
+            outcome, error = "cancelled", repr(exc)
+            raise
         finally:
             seconds = time.perf_counter() - start
             observe_dependency(self.dependency, operation, outcome, seconds)

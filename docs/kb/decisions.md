@@ -73,3 +73,14 @@ Newest last. Format: milestone: decision (reason).
   criteria or dropping the scenario): fixed CPU fault sizes are neither reproducible nor portable.
 - M9: nginx config directory mount + `-c` instead of a file mount (inode gotcha, see stage0.md).
 - M6: incorrect_timeout default 5ms: 20ms produced no errors at 20 rps (latent), 5ms clips the tail (~6% 504).
+- M10 (review hardening, full-project code review): one PR for all findings the user approved (52 items);
+  per-item outcomes in [review.md](review.md).
+- M10: nested timeouts by raising the gateway to 8s, not by lowering order→payment below 5s: the calibrated
+  payment scenarios (2.5s) keep their margin. Side effect: connection_failure drop is now a slow 502 from
+  order (it records `payment_failed`) instead of a 504 from the gateway.
+- M10: DB/Redis timeouts (10s / 5s) sit above every calibrated slowdown, so they only bound real hangs and
+  don't change any scenario's symptoms.
+- M10: onset scan stays at observe start (not inject start): a decoy rollout's restart blip would become the
+  onset of deploy-then-payment.
+- M10: enforce reports errors per fault instead of failing the pass; a failed rollback keeps the fault
+  `failed` + `needs_cleanup` (retried by DELETE) instead of a new state, so the SQLite CHECK stays as is.

@@ -7,7 +7,9 @@ from starlette.responses import Response
 
 # The service name comes from the Prometheus `job` label, so it is not repeated here.
 # Fine low end: in-network calls take ~1-25ms, and coarse buckets make distinct services look identical.
-BUCKETS = (0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 10.0)
+# Up to 30 s: injected latency goes that high (faultpoint), and so does nginx's proxy_read_timeout.
+BUCKETS = (0.001, 0.0025, 0.005, 0.0075, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 10.0, 15.0,
+           20.0, 30.0)
 
 HTTP_REQUESTS = Counter(
     "http_requests_total", "Inbound HTTP requests", ["method", "route", "status"]
@@ -24,6 +26,11 @@ DEPENDENCY_DURATION = Histogram(
 )
 
 
+def is_timeout(exc: BaseException) -> bool:
+    """Builtin/asyncio timeouts and client libraries' own ones (e.g. redis.exceptions.TimeoutError)."""
+    return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"
+
+
 def observe_dependency(dependency: str, operation: str, outcome: str, seconds: float) -> None:
     DEPENDENCY_REQUESTS.labels(dependency, operation, outcome).inc()
     DEPENDENCY_DURATION.labels(dependency, operation).observe(seconds)
@@ -31,16 +38,16 @@ def observe_dependency(dependency: str, operation: str, outcome: str, seconds: f
 
 @asynccontextmanager
 async def track(dependency: str, operation: str):
-    """Records duration and outcome (success|timeout|error) of a non-HTTP dependency call."""
+    """Records duration and outcome (success|timeout|error|cancelled) of a non-HTTP dependency call."""
     start = time.perf_counter()
     outcome = "success"
     try:
         yield
-    except TimeoutError:
-        outcome = "timeout"
+    except Exception as exc:
+        outcome = "timeout" if is_timeout(exc) else "error"
         raise
-    except Exception:
-        outcome = "error"
+    except BaseException:  # asyncio.CancelledError: the caller gave up (e.g. the client disconnected)
+        outcome = "cancelled"
         raise
     finally:
         observe_dependency(dependency, operation, outcome, time.perf_counter() - start)

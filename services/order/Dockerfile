@@ -8,10 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
+# Dependencies first (layer cached until a requirements file or a lib's pyproject changes): the libs are
+# installed from a stub with just their pyproject, then their sources on top without dependencies.
+COPY services/order/requirements.txt .
+COPY libs/observability/pyproject.toml /libs/observability/
+RUN mkdir /libs/observability/observability \
+    && pip install --no-cache-dir -r requirements.txt "/libs/observability[http,postgres]"
 COPY libs/observability /libs/observability
 COPY libs/faultpoint /libs/faultpoint
-COPY services/order/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt /libs/faultpoint "/libs/observability[http,postgres]"
+RUN pip install --no-cache-dir --no-deps --force-reinstall /libs/observability /libs/faultpoint
 
 COPY services/order/app ./app
 

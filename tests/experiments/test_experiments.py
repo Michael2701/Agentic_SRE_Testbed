@@ -4,7 +4,6 @@ Runs use shortened phases via `overrides`; the scenario files keep the full dura
 """
 
 import json
-import time
 
 import httpx
 import pytest
@@ -92,6 +91,21 @@ def test_one_experiment_at_a_time_and_abort(runner, faults):
     assert faults.get("/faults", params={"state": "active"}).json() == []
 
 
+def test_abort_during_injection_leaves_no_fault(runner, faults):
+    """M10: an abort while the injector is still redeploying used to lose the fault (it stayed active)."""
+    started = runner.post("/experiments", json={"scenario": "bad-deployment", "overrides": {
+        "durations": {"baseline_s": 3, "observe_s": 120}}})
+    assert started.status_code == 202
+    experiment_id = started.json()["id"]
+    assert eventually(lambda: runner.get(f"/experiments/{experiment_id}").json()["phase"] == "inject",
+                      timeout=20, interval=0.1)
+
+    aborted = runner.delete(f"/experiments/{experiment_id}").json()
+    assert aborted["state"] == "aborted", aborted
+    assert [f["type"] for f in aborted["ground_truth"]["faults"]] == ["bad_deployment"]
+    assert faults.get("/faults", params={"state": "active"}).json() == []
+
+
 def test_refuses_to_start_with_active_faults(runner, faults):
     inject(faults, "payment_latency", latency_ms=10)
     assert runner.post("/experiments", json={"scenario": "payment-error"}).status_code == 409
@@ -107,7 +121,8 @@ def test_invalid_requests(runner, body):
 
 
 def test_runner_invisible_to_diagnostic_plane(runner):
-    assert runner.get("/experiments").json(), "needs a recorded experiment (runs after the lifecycle test)"
+    if not runner.get("/experiments").json():  # needs a recorded experiment (also when run alone)
+        assert run(runner, "payment-error")["state"] == "completed"
     assert loki_streams('{service="experiment-runner"}', since="1h") == []
     assert loki_streams('{service=~".+", service!="tests"} |= "exp-"', since="1h") == []
     jobs = {t["labels"]["job"] for t in httpx.get(f"{PROMETHEUS_URL}/api/v1/targets").json()["data"]["activeTargets"]}

@@ -1,6 +1,7 @@
 import os
 import statistics
 import time
+import uuid
 
 import httpx
 import pytest
@@ -18,11 +19,22 @@ ORDER = {"item": "book", "quantity": 1, "amount_cents": 1500}
 
 
 def eventually(check, timeout=45, interval=1):
-    """Retries `check` until it returns a truthy value; telemetry pipelines are asynchronous."""
+    """Retries `check` until it returns a truthy value; telemetry pipelines are asynchronous.
+
+    A transient error (a backend still starting up, a dropped connection, a half-written answer) counts as
+    "not yet"; if it persists until the deadline, it is raised.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        result = check()
-        if result or time.monotonic() > deadline:
+        try:
+            result, error = check(), None
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            result, error = None, exc
+        if result:
+            return result
+        if time.monotonic() > deadline:
+            if error is not None:
+                raise error
             return result
         time.sleep(interval)
 
@@ -40,9 +52,16 @@ def metric_value(text: str, name: str, **labels) -> float:
 
 
 def loki_streams(query: str, since: str = "5m") -> list[dict]:
-    return httpx.get(
-        f"{LOKI_URL}/loki/api/v1/query_range", params={"query": query, "since": since, "limit": 100}
-    ).json()["data"]["result"]
+    response = httpx.get(f"{LOKI_URL}/loki/api/v1/query_range", params={"query": query, "since": since, "limit": 100})
+    response.raise_for_status()
+    return response.json()["data"]["result"]
+
+
+def loki_caught_up(client, token) -> None:
+    """Negative log checks mean something only once log shipping caught up: waits for a fresh marker request."""
+    marker = f"marker-{uuid.uuid4().hex}"
+    place_order(client, token, request_id=marker)
+    assert eventually(lambda: loki_streams(f'{{service="payment"}} |= "{marker}"'), timeout=30), "Loki lags behind"
 
 
 # ---------------------------------------------------------------- fault-test helpers
@@ -94,7 +113,9 @@ def five_xx_ratio(results) -> float:
 
 
 def prom_value(query: str) -> float:
-    result = httpx.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}).json()["data"]["result"]
+    response = httpx.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query})
+    response.raise_for_status()
+    result = response.json()["data"]["result"]
     return float(result[0]["value"][1]) if result else 0.0
 
 
@@ -102,6 +123,16 @@ def prom_value(query: str) -> float:
 def faults():
     with httpx.Client(base_url=FAULT_INJECTOR_URL, timeout=90) as client:
         yield client
+
+
+@pytest.fixture(scope="session", autouse=True)
+def clean_start(faults):
+    """Leftovers of an interrupted run (active faults) would fail everything in confusing ways."""
+    running = httpx.get(f"{EXPERIMENT_RUNNER_URL}/experiments", params={"state": "running"}, timeout=10).json()
+    if running:  # never ours: test experiments are awaited
+        pytest.exit(f"experiment {running[0]['id']} is running; wait for it or abort it before testing", 2)
+    response = faults.delete("/faults")
+    assert response.status_code == 200, response.text
 
 
 @pytest.fixture

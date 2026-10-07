@@ -44,12 +44,30 @@ class FaultRequest(BaseModel):
     experiment_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]{1,64}$")
 
 
+ENFORCE_ERROR = "enforce failed: "
+
+
+def record_enforce_errors(active: list[dict], errors: dict[str, str]) -> None:
+    """Shows on each active fault whether the last pass could realize it (the error clears once it can)."""
+    for fault in active:
+        current = fault["error"] or ""
+        if fault["id"] in errors:
+            wanted = ENFORCE_ERROR + errors[fault["id"]]
+        elif current.startswith(ENFORCE_ERROR):
+            wanted = None
+        else:
+            continue  # keeps e.g. a "revert failed" note
+        if wanted != fault["error"]:
+            store.update(fault["id"], "active", wanted)
+
+
 async def reconcile_loop(reconciler: Reconciler) -> None:
     while True:
         await asyncio.sleep(settings.reconcile_interval_seconds)
         try:
             async with lock:
-                await reconciler.enforce(store.list("active"))
+                active = store.list("active")
+                record_enforce_errors(active, await reconciler.enforce(active))
         except Exception as exc:
             logger.warning("reconcile_failed", extra={"error": repr(exc)})
 
@@ -60,9 +78,15 @@ async def lifespan(app: FastAPI):
     postgres = Postgres(settings.admin_database_url, settings.reporting_database_url)
     app.state.reconciler = Reconciler(docker, store, postgres, Redis(settings.redis_url), settings.healthy_timeout_seconds,
                                       settings.edge_dir)
+    try:
+        await docker.sweep()
+    except Exception as exc:
+        logger.warning("sweep_failed", extra={"error": repr(exc)})
     task = asyncio.create_task(reconcile_loop(app.state.reconciler))
     yield
-    task.cancel()
+    async with lock:  # never cancel the loop mid-operation (e.g. between the steps of a redeploy)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     await app.state.reconciler.aclose()
     await postgres.aclose()
     await docker.aclose()
@@ -101,9 +125,11 @@ async def create_fault(request: FaultRequest):
     async with lock:
         active = store.list("active")
         key = conflict_key(request.type, target)
-        clash = next((f for f in active if conflict_key(f["type"], f["target"]) == key), None)
+        # a fault awaiting cleanup still holds what it partially applied, so it blocks like an active one
+        clash = next((f for f in [*active, *store.pending_cleanup()] if conflict_key(f["type"], f["target"]) == key), None)
         if clash:
-            raise HTTPException(409, f"conflicts with active fault {clash['id']} ({clash['type']} on {target})")
+            raise HTTPException(409, f"conflicts with {clash['state']} fault {clash['id']} ({clash['type']} on {target})"
+                                     + ("; DELETE it to finish its cleanup" if clash["needs_cleanup"] else ""))
         timestamp = now()
         fault = store.insert({
             "id": f"flt-{secrets.token_hex(6)}",
@@ -111,15 +137,17 @@ async def create_fault(request: FaultRequest):
             "type": request.type, "target": target, "parameters": params,
             "state": "active", "error": None, "created_at": timestamp, "updated_at": timestamp,
         })
-        try:
-            await app.state.reconciler.enforce([*active, fault])
-        except Exception as exc:
-            failed = store.update(fault["id"], "failed", repr(exc))
+        errors = await app.state.reconciler.enforce([*active, fault])
+        record_enforce_errors(active, errors)
+        if fault["id"] in errors:
+            error = errors[fault["id"]]
             try:  # undo whatever was partially applied
                 await app.state.reconciler.revert(fault, active)
-            except Exception as rollback_exc:  # the periodic loop keeps enforcing the remaining faults
-                logger.warning("rollback_failed", extra={"error": repr(rollback_exc)})
-            logger.error("fault_failed", extra={"fault_id": fault["id"], "error": repr(exc)})
+                failed = store.update(fault["id"], "failed", error)
+            except Exception as rollback_exc:  # DELETE retries it (see _cleanup)
+                logger.warning("rollback_failed", extra={"fault_id": fault["id"], "error": repr(rollback_exc)})
+                failed = store.update(fault["id"], "failed", f"{error}; rollback failed: {rollback_exc!r}", True)
+            logger.error("fault_failed", extra={"fault_id": fault["id"], "error": error})
             return JSONResponse(status_code=502, content={"detail": "could not apply fault", "fault": failed})
     logger.info("fault_injected", extra={"fault_id": fault["id"], "type": fault["type"], "target": target})
     return fault
@@ -138,16 +166,36 @@ async def get_fault(fault_id: str) -> dict:
     return fault
 
 
+class RevertError(Exception):
+    def __init__(self, fault: dict):
+        super().__init__(fault["error"])
+        self.fault = fault
+
+
 async def _remove(fault: dict) -> dict:
     """Reverts one active fault; it stays active (with an error) if the revert fails."""
     still_active = [f for f in store.list("active") if f["id"] != fault["id"]]
     try:
-        await app.state.reconciler.revert(fault, still_active)
+        warning = await app.state.reconciler.revert(fault, still_active)
     except Exception as exc:
-        store.update(fault["id"], "active", f"revert failed: {exc!r}")
-        raise HTTPException(502, f"could not revert {fault['id']}: {exc!r}")
+        raise RevertError(store.update(fault["id"], "active", f"revert failed: {exc!r}"))
     logger.info("fault_removed", extra={"fault_id": fault["id"], "type": fault["type"], "target": fault["target"]})
-    return store.update(fault["id"], "removed")
+    return store.update(fault["id"], "removed", warning)
+
+
+async def _cleanup(fault: dict) -> dict:
+    """Retries undoing what a failed fault partially applied; it stays failed either way."""
+    error = fault["error"].split("; rollback failed: ")[0]
+    try:
+        await app.state.reconciler.revert(fault, store.list("active"))
+    except Exception as exc:
+        raise RevertError(store.update(fault["id"], "failed", f"{error}; rollback failed: {exc!r}", True))
+    logger.info("fault_cleaned_up", extra={"fault_id": fault["id"], "type": fault["type"], "target": fault["target"]})
+    return store.update(fault["id"], "failed", f"{error}; cleaned up")
+
+
+async def _undo(fault: dict) -> dict:
+    return await (_remove(fault) if fault["state"] == "active" else _cleanup(fault))
 
 
 @app.delete("/faults/{fault_id}")
@@ -156,15 +204,34 @@ async def delete_fault(fault_id: str) -> dict:
         fault = store.get(fault_id)
         if fault is None:
             raise HTTPException(404, "fault not found")
-        if fault["state"] != "active":
+        if fault["state"] != "active" and not fault["needs_cleanup"]:
             return fault
-        return await _remove(fault)
+        try:
+            return await _undo(fault)
+        except RevertError as exc:
+            raise HTTPException(502, f"could not revert {fault_id}: {exc}")
 
 
 @app.delete("/faults")
-async def delete_all_faults() -> list[dict]:
+async def delete_all_faults():
+    """Reverts every active fault (and finishes pending cleanups). Every fault is tried; one that fails is
+    retried once after the others, since a revert can depend on another (e.g. workers in a paused container)."""
     async with lock:
-        return [await _remove(fault) for fault in store.list("active")]
+        results: dict[str, dict] = {}
+        pending = [*store.list("active"), *store.pending_cleanup()]
+        for attempt in range(2):
+            failed = []
+            for fault in pending:
+                try:
+                    results[fault["id"]] = await _undo(fault)
+                except RevertError as exc:
+                    results[fault["id"]] = exc.fault
+                    failed.append(exc.fault)
+            pending = failed
+            if not pending:
+                return list(results.values())
+        return JSONResponse(status_code=502, content={
+            "detail": f"could not revert {', '.join(f['id'] for f in pending)}", "faults": list(results.values())})
 
 
 @app.get("/health")

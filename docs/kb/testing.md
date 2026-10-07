@@ -4,13 +4,16 @@
   against `BASE_URL=http://nginx`, which exercises the real public path; the host needs no Python deps.
 - **`tests/conftest.py` (shared by `integration/` and `faults/`)**: a session `client` fixture waits for
   `/ready` (`READY_TIMEOUT_SECONDS`, default 60), and the `token` fixture logs in as alice. It also holds
-  URLs, `DEMO_USER`, `ORDER`, `eventually()`, `metric_value()` (labelled *and* unlabelled samples),
-  `loki_streams()`, the `*_METRICS` URLs and the fault helpers `faults` (session injector client),
+  URLs, `DEMO_USER`, `ORDER`, `eventually()` (transient HTTP/JSON errors count as "not yet"),
+  `metric_value()` (labelled *and* unlabelled samples), `loki_streams()`, `loki_caught_up()` (a marker
+  request must reach Loki before a "not in Loki" assertion), the `*_METRICS` URLs and the fault helpers `faults` (session injector client),
   `recover_after`, `inject()`, `place_order()`, `sample()`, `median_latency()`, `five_xx_ratio()`,
   `prom_value()`. Fault modules opt in with
   `pytestmark = pytest.mark.usefixtures("recover_after")`. Import them with
   `from conftest import ...`. Keep a single conftest: two `conftest.py` files would clash on that import.
-- Order: `pytest integration faults` (tests/Dockerfile CMD). Fault tests run last because they mutate state.
+- Order: `pytest integration faults experiments` (tests/Dockerfile CMD). Integration first; faults and
+  experiments mutate state. The autouse session fixture `clean_start` removes faults left by an interrupted
+  run and refuses to start (pytest exit) while an experiment is running (it would be someone else's).
 - `tests/faults/test_faults.py` (18 tests, ~30s): API lifecycle/validation/409/delete-all; incidents
   for latency (elapsed ≥1.5s + order dependency histogram), error (502 + `orders_total{payment_failed}`
   + warning/error logs in Loki for the request_id), and unavailable for payment/auth/order (502,
@@ -25,7 +28,7 @@
   - `sample()` spaces requests 250 ms apart because periodic faults need it.
 - `tests/faults/test_infra_faults.py` (23 tests, ~2.5 min), M6: network latency to one peer (client-side
   postgres latency up, payment edge flat), re-application after a target restart, packet-loss tail,
-  connection failure reject (fast 502, peer healthy) / drop (504), incorrect endpoint (DNS error, uptime
+  connection failure reject (fast 502, peer healthy) / drop (502 from order after its 5s payment timeout), incorrect endpoint (DNS error, uptime
   reset, payment never reached, recovery), incorrect timeout (fast 504), short token TTL (401 after 3s),
   bad deployment errors (`app_build_info` 1.1.0, version in Loki) and crash loop (`up=0`, crash log in Loki),
   validation, conflicts, no mechanism names in Loki. `status_becomes()` polls past the first requests after a
@@ -38,18 +41,23 @@
   domains NORMAL + slow requests in nginx logs); misleading correlation with `time_scale 0.1`: rollback
   (removing the deploy fault) leaves orders > 2 s, onset ≈ the real cause, deploy ≥ 20 s earlier.
   `make test-challenges` runs only this file.
-- Loki checks for leaked names exclude `service="tests"`: pytest output of a failed run is shipped too.
-- `tests/experiments/test_experiments.py` (9 tests, ~50s), M7: scenarios valid, full lifecycle on
+- Loki checks for leaked names exclude `service="tests"`: historical; since M10 Alloy drops the `tests` and
+  `db-migrate` logs (pytest output names faults and scenarios).
+- `tests/faults/test_combinations.py` (3 tests), M10: faults allowed together are enforceable and removable
+  together (hogs + pause on one container, redeploy of a service with a faultpoint fault, network fault
+  removed while the target is paused). All three failed before M10.
+- `tests/experiments/test_experiments.py` (10 tests, ~1 min), M7: scenarios valid, full lifecycle on
   payment-latency with shortened phases (`overrides`): phase order/timestamps, ground truth linked to the
   injector fault (`experiment_id`, removed), incident without the cause, verdict, Prometheus snapshot;
-  payment-error; one-at-a-time 409 + abort during observe removes faults; 409 with an active ad-hoc fault;
+  payment-error; one-at-a-time 409 + abort during observe removes faults; abort during inject (a
+  redeploy in flight, M10) leaves no fault; 409 with an active ad-hoc fault;
   422s; runner invisible in Loki/Prometheus. The autouse `clean` fixture aborts running experiments and
   removes faults.
 - `tests/faults/test_recovery_sweep.py` (23 tests, ~1 min), M9: every fault type injected and removed; the
   system returns to its pre-fault state (see stage0.md). Add a case when adding a fault type.
 - `status_becomes()` lives in conftest (moved from test_infra_faults in M9).
 - Host-side checks (not pytest, need the host's docker/ports): `make smoke`, `make acceptance` (stage0.md).
-- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 113 tests, ~13 min (run long batches under `caffeinate -i` on a laptop).
+- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 141 tests, ~17 min (run long batches under `caffeinate -i` on a laptop).
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
   (redeploy not repeated: same container id and label; netem qdisc still there; recover restores the
@@ -68,7 +76,8 @@
 - Shared helpers live in `conftest.py`: URLs (`PROMETHEUS_URL`, `LOKI_URL`, `GRAFANA_URL`, `TEMPO_URL`),
   `DEMO_USER`, `ORDER`, `eventually()`. Import them with `from conftest import ...`. Module-scoped
   fixtures must not depend on the function-scoped `token`.
-- Tests env: the in-network URLs above; the tests service waits for nginx, prometheus and grafana to be healthy.
+- Tests env: the in-network URLs above; the tests service waits for nginx, prometheus, grafana, fault-injector
+  and experiment-runner to be healthy.
 - `test_business_counters_increase` asserts an exact +1, so don't run `make load` concurrently with `make test`.
 - Manual:
   ```bash

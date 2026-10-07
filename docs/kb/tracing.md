@@ -12,11 +12,12 @@ nginx: POST /orders [server]  (root)
 
 ## Pieces
 - **Tempo 2.8.2** (`tempo/config.yml`): OTLP gRPC :4317 (nginx) and HTTP :4318 (Python), API :3200, local
-  storage in the container (no volume, 24h retention). The metrics-generator (`service-graphs`,
+  storage in the container (no volume, 48h retention, as Prometheus and Loki). The metrics-generator (`service-graphs`,
   `span-metrics`) remote-writes to Prometheus (`--web.enable-remote-write-receiver`), producing
   `traces_service_graph_*` and `traces_spanmetrics_*`.
 - **nginx** image `nginx:1.27-alpine-otel`, `load_module modules/ngx_otel_module.so`. `otel_trace on`
-  (off for `/nginx-health` and the :8081 status server); `otel_trace_context propagate` in `location /`.
+  (off for `/nginx-health` and the :8081 status server); `otel_trace_context inject` in `location /` (M10: was `propagate`; a client-supplied `traceparent` could
+  pick trace IDs or turn sampling off downstream via `ParentBased`).
   Span name is `"$request_method $otel_route"`, where the `map` collapses `/orders/<id>` to
   `/orders/{order_id}` (the value must be quoted: braces). Response header `X-Trace-ID` comes from
   `$otel_trace_id`, which is also in the JSON log as `trace_id`.

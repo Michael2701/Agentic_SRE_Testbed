@@ -28,6 +28,7 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | 7 | Experiment framework | ✅ done (main `d1db57d`) | [experiments.md](docs/kb/experiments.md) |
 | 8 | Diagnostic challenge scenarios | ✅ done (main `94ff75b`) | [challenges.md](docs/kb/challenges.md) |
 | 9 | Stage 0 stabilization | ✅ done (main `68e42fc`) — **Stage 0 complete** | [stage0.md](docs/kb/stage0.md) |
+| 10 | Review hardening (full code review fixes) | 🚧 in progress (`feature/m10-review-hardening`) | [review.md](docs/kb/review.md) |
 
 ## Topics
 
@@ -46,4 +47,5 @@ Source of truth for requirements: `project.md`. User-facing docs: `README.md`.
 | [testing.md](docs/kb/testing.md) | running/writing tests, manual checks, DB/Redis inspection |
 | [environment.md](docs/kb/environment.md) | host tooling issues, Docker Desktop, permission-classifier limits |
 | [git.md](docs/kb/git.md) | branching/PR flow, committing, remote, history rewrites |
+| [review.md](docs/kb/review.md) | M10 code review: every finding and its outcome (fixed / not changed / deferred) |
 | [decisions.md](docs/kb/decisions.md) | "why is it done this way?" — decision log |

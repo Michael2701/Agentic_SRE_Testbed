@@ -3,7 +3,7 @@
 ## Service `services/experiment-runner` (control plane, host `127.0.0.1:8091`)
 - Separate service (not part of the injector): it only touches the system through the **fault-injector API**
   and the public **nginx** entry point, and reads Prometheus. Built without `libs/observability`, not scraped,
-  logs dropped by Alloy (`fault-injector|experiment-runner` drop rule). Same isolation rule as in
+  logs dropped by Alloy (`fault-injector|experiment-runner|tests|db-migrate` drop rule). Same isolation rule as in
   [faults.md](faults.md).
 - Files: `app/scenarios.py` (scenario models, file loading, partial overrides), `app/traffic.py` (load +
   per-request samples, `summarize`), `app/experiments.py` (lifecycle, symptoms, recovery, Prometheus
@@ -11,12 +11,17 @@
   one JSON doc per experiment, sequential ids `exp-<n>`), `app/main.py` (API, text summaries).
 - API: `GET /scenarios[?format=text]` (each fault spec checked via injector `POST /faults/validate`),
   `POST /experiments {scenario, overrides?}[?wait=true&format=text]` → 202, `GET /experiments[?state=]`,
-  `GET /experiments/{id}[?format=text]`, `DELETE /experiments/{id}` (abort: traffic stops, faults removed).
+  `GET /experiments/{id}[?format=text]`, `DELETE /experiments/{id}` (abort: traffic stops, faults removed;
+  only the experiment the runner is actually running is cancelled, a stale `running` one is just cleaned up).
 - Rules: one experiment at a time (409); 409 if any fault is already active (polluted baseline); 422 for an
   unknown scenario, invalid overrides or a fault spec the injector rejects. `wait=true` shields the task,
   so a dropped client connection doesn't cancel the run.
-- Runner restart mid-run: at startup, `running` experiments get their faults removed (ids from
-  ground truth) and become `aborted`.
+- Runner restart mid-run: at startup, `running` experiments get their faults removed and become `aborted`;
+  retried every 5s until the injector answers (it may still be starting).
+- Fault removal (M10) covers the ground-truth ids **and** every active fault tagged with the experiment id,
+  and an abort during inject lets the in-flight `POST /faults` finish (shielded) so its fault is known.
+  Removal errors are recorded in `error`; a run whose faults could not be removed ends `failed`, not
+  `completed`.
 
 ## Scenarios (`experiments/scenarios/<name>.json`, mounted ro at `/scenarios`)
 `{name (= file stem), description, tags?, faults: [{type, target?, parameters, at_s?, baseline_relative?}], traffic: {rate,
@@ -25,8 +30,8 @@ expect: slow|errors|auth_errors|none, evidence?}`. M8 fields (tags, at_s, max_in
 `overrides.time_scale`, onset, domain view) are described in [challenges.md](challenges.md); M9
 `baseline_relative` (parameters computed from the baseline, needs `target`) in [stage0.md](stage0.md).
 Starter set (one simple cause each): payment-latency, payment-error, db-slow-query, redis-unavailable,
-network-latency (order→payment), cpu-saturation, connection-failure, bad-deployment. `faults` is a list so
-M8 can combine causes; timed offsets between faults are not there yet (M8).
+network-latency (order→payment), cpu-saturation, connection-failure, bad-deployment. `faults` is a list, and
+M8 added timed offsets (`at_s`).
 
 ## Lifecycle (`Runner._run`)
 `baseline` (gateway `/ready` must be 200, traffic starts, measure) → `inject` (faults created with
@@ -38,7 +43,7 @@ and the state is `failed`/`aborted`.
 
 ## Record
 - `ground_truth.faults`: id, type, target, parameters, created_at. **Hidden**: control plane only.
-- `incident`: `start` (inject), `end` (removal), `entry_point`, `symptoms`. No cause: this is what a
+- `incident`: `start` (onset, see [challenges.md](challenges.md)), `end` (removal), `entry_point`, `symptoms`. No cause: this is what a
   future investigator gets. Tests check it doesn't mention the target or the fault id.
 - `phases`: name, started_at, ended_at. `results`: client-side stats of order requests per phase (p50/p95/
   p99, error ratio incl. transport errors, 401 ratio, status counts; failed logins are background noise and
@@ -46,6 +51,8 @@ and the state is `failed`/`aborted`.
   quantiles interpolate within buckets: 1.5s client p95 reads ~2.4s between the 1 and 2.5 buckets).
 - `verdict`: expected, observed, degraded, expected_symptom_seen, recovered, recovery_seconds.
 - Symptom thresholds (vs baseline): slow = p95 ≥ max(2×, +50 ms); errors / auth_errors = ratio ≥ +5 pp.
+- Windows are by request **start** time (samples are recorded when they finish, `Traffic.window` sorts them),
+  so a slow request counts in the window where it began and `rps` uses min/max start.
 
 ## Traffic
 Same mix and User-Agent (`shop-client/1.0`) as `tests/load.py`, so experiment load looks like ordinary load
