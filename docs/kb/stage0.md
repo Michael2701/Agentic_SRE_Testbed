@@ -13,7 +13,8 @@ and the acceptance results.
 - `make smoke` (`scripts/smoke.py`, host, stdlib): ready + login + order 201, no active faults, no
   `sre-testbed-*-prev` containers (an interrupted redeploy), all scrape targets up, Loki (Grafana datasource
   health) and Tempo (`/api/echo` via the Grafana datasource proxy: Tempo's health check isn't implemented in
-  Grafana, and `/ready` answers 503 "waiting for 15s after being ready" for a long time).
+  Grafana, and `/ready` answers 503 "waiting for 15s after being ready" for a long time), and the portal (every
+  tool by path on `localhost:$PORTAL_PORT`).
 - `make acceptance [FULL=1] [ROUNDS=N] [SCENARIOS="a b"]` (`scripts/acceptance.py`): every valid scenario
   through the runner, one at a time. Short runs use the test phases (baseline 10, observe 25, recovery window
   5); scenarios with scheduled faults get `time_scale 0.1` and observe stretched past the last `at_s`. PASS =

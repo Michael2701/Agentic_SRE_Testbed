@@ -57,7 +57,7 @@
   system returns to its pre-fault state (see stage0.md). Add a case when adding a fault type.
 - `status_becomes()` lives in conftest (moved from test_infra_faults in M9).
 - Host-side checks (not pytest, need the host's docker/ports): `make smoke`, `make acceptance` (stage0.md).
-- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 141 tests, ~17 min (run long batches under `caffeinate -i` on a laptop).
+- `make test-faults` runs only `faults/`, `make test-experiments` only `experiments/`. Full `make test` (integration → faults → experiments): 160 tests, ~15 min (run long batches under `caffeinate -i` on a laptop).
 - Not automated (the tests container has no docker socket): fault persistence across an injector
   restart. Verified manually in M4 (`docker compose restart fault-injector` → fault still active) and M6
   (redeploy not repeated: same container id and label; netem qdisc still there; recover restores the

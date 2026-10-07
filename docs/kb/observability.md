@@ -44,7 +44,8 @@
   `com.docker.compose.project=sre-testbed`, **refresh_interval 5s** (the 60s default missed containers
   started after Alloy). Labels are `service`, `container` and `level` (from JSON). request_id is NOT a
   label; query it with `|= "<id>"` or `| json | request_id="..."`.
-- Grafana 12.1 (host :3000, anonymous Admin, login form off). Datasource uids are `prometheus` and
+- Grafana 12.1 (`127.0.0.1:3000` for the API; the UI through the portal at `/grafana/`, because `root_url` carries
+  that prefix; embedding allowed for the Control Center; anonymous Admin, login form off). Datasource uids are `prometheus` and
   `loki`. Dashboards are in `grafana/dashboards/*.json` with uids `sre-overview`, `sre-dependencies`,
   `sre-logs`, `sre-traces`, `sre-domains`, folder "SRE Testbed". The home dashboard is Service Overview.
 - Exporters: nginx-exporter (→ `nginx:8081/stub_status`, internal server block), postgres-exporter,
