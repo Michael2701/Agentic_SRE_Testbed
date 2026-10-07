@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS faults (
     parameters    TEXT NOT NULL,
     state         TEXT NOT NULL CHECK (state IN ('active', 'removed', 'failed')),
     error         TEXT,
+    -- failed, and undoing what it partially applied failed too: DELETE retries the revert (main.py)
+    needs_cleanup INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -46,17 +48,21 @@ class FaultStore:
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
+        columns = {row["name"] for row in self._db.execute("PRAGMA table_info(faults)")}
+        if "needs_cleanup" not in columns:  # a faults.db from before M10
+            self._db.execute("ALTER TABLE faults ADD COLUMN needs_cleanup INTEGER NOT NULL DEFAULT 0")
 
     @staticmethod
     def _to_dict(row: sqlite3.Row) -> dict:
         fault = dict(row)
         fault["parameters"] = json.loads(fault["parameters"])
+        fault["needs_cleanup"] = bool(fault["needs_cleanup"])
         return fault
 
     def insert(self, fault: dict) -> dict:
         self._db.execute(
-            "INSERT INTO faults VALUES (:id, :experiment_id, :type, :target, :parameters, :state, :error,"
-            " :created_at, :updated_at)",
+            "INSERT INTO faults (id, experiment_id, type, target, parameters, state, error, created_at, updated_at)"
+            " VALUES (:id, :experiment_id, :type, :target, :parameters, :state, :error, :created_at, :updated_at)",
             {**fault, "parameters": json.dumps(fault["parameters"])},
         )
         return self.get(fault["id"])
@@ -72,11 +78,15 @@ class FaultStore:
             rows = self._db.execute("SELECT * FROM faults ORDER BY created_at")
         return [self._to_dict(row) for row in rows]
 
-    def update(self, fault_id: str, state: str, error: str | None = None) -> dict:
+    def update(self, fault_id: str, state: str, error: str | None = None, needs_cleanup: bool = False) -> dict:
         self._db.execute(
-            "UPDATE faults SET state = ?, error = ?, updated_at = ? WHERE id = ?", (state, error, now(), fault_id)
+            "UPDATE faults SET state = ?, error = ?, needs_cleanup = ?, updated_at = ? WHERE id = ?",
+            (state, error, needs_cleanup, now(), fault_id),
         )
         return self.get(fault_id)
+
+    def pending_cleanup(self) -> list[dict]:
+        return [fault for fault in self.list("failed") if fault["needs_cleanup"]]
 
     def save_baseline(self, service: str, env: list[str], cmd: list[str], restart: dict) -> None:
         self._db.execute("INSERT OR REPLACE INTO baselines VALUES (?, ?, ?, ?)",

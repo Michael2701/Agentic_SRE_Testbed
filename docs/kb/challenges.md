@@ -55,6 +55,10 @@ test checks exactly that.
 - `incident.start` = **onset**: in the first half-overlapping `recovery_window_s` window with symptoms, the
   start of its first symptomatic request (not the window start: that was up to half a window early), not
   the injection time. `results.observe` covers onset → end; `results.observe_full` the whole phase.
+  The scan starts at `observe_start`, **not** `inject_start`, on purpose (M10 review): a redeploy's inject
+  phase (up to ~60s waiting for healthy) has a short restart blip, which would make a harmless rollout (the
+  decoy of `deploy-then-payment`) the onset. Symptoms that begin during inject are therefore dated at
+  observe start. A phase shorter than one window (or its trailing part) is scanned as a shorter window.
 - `domains`: Prometheus signals per domain for baseline and observe (`DOMAIN_SIGNALS` in
   `experiments.py`), judged NORMAL/DEGRADED (latency ≥ max(2×, +200 ms), M9: +50 ms flaked on bursts; ratio ≥ +0.2; up < 1; no data =
   NORMAL). `verdict.evidence_matched` compares with the scenario's `evidence`.

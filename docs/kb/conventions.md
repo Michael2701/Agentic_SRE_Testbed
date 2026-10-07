@@ -15,9 +15,12 @@
 - Config: a `pydantic-settings` `Settings` in `app/config.py` with in-network defaults, overridden by env in
   `docker-compose.yml` (`${VAR:-default}`); document new vars in `.env.example`.
 - Clients (`httpx.AsyncClient` with `base_url`, asyncpg pool, redis) are created in FastAPI `lifespan`
-  and stored on `app.state`. Every outbound HTTP call has an explicit timeout (`HTTP_TIMEOUT_SECONDS`).
+  and stored on `app.state`. Every outbound HTTP call has an explicit timeout (`HTTP_TIMEOUT_SECONDS`), and
+  so does every database/Redis call (`DB_TIMEOUT_SECONDS`, `REDIS_TIMEOUT_SECONDS`). Timeouts nest: a
+  caller waits longer than its callee's own budget (gateway 8s > order→payment 5s, see orders.md).
 - Health: `GET /health` is liveness and checks no dependencies. `GET /ready` checks dependencies
-  (auth: Redis ping; order: `SELECT 1`; gateway: auth+order `/ready`). Payment has only `/health`.
+  (auth: Redis ping; order: `SELECT 1`; gateway: auth+order `/ready`, in parallel through an uninstrumented
+  client with a 2s timeout, so probes stay out of dependency telemetry). Payment has only `/health`.
 - Errors: JSON `{"detail": ...}`. The gateway maps transport errors to 502 and timeouts to 504; invalid JSON → 400.
   The gateway `relay()`s downstream status and body unchanged.
 - Pinned deps: fastapi 0.115.6, uvicorn 0.34.0, pydantic-settings 2.7.1, httpx 0.28.1,

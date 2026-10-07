@@ -16,9 +16,12 @@ x-app-limits: &app-limits
   cpus: 0.5
   mem_limit: 256m
 
+# Infrastructure and control plane restart after a crash or a Docker restart (`restart: unless-stopped`; a
+# container stopped by a fault stays stopped). App services have none: the injector manages theirs (crash loops).
 services:
   nginx:
     image: nginx:1.27-alpine-otel
+    restart: unless-stopped
     # The directory, not the file, is mounted: a single-file bind mount keeps the old inode when git or an
     # editor replaces nginx.conf on the host, and `nginx -s reload` (proxy faults) then fails.
     command: ["nginx", "-c", "/etc/nginx/testbed/nginx.conf", "-g", "daemon off;"]
@@ -31,7 +34,7 @@ services:
       gateway:
         condition: service_healthy
       tempo:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/nginx-health"]
       interval: 5s
@@ -48,7 +51,7 @@ services:
       <<: *otel-env
       AUTH_URL: http://auth:8000
       ORDER_URL: http://order:8000
-      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+      HTTP_TIMEOUT_SECONDS: ${GATEWAY_HTTP_TIMEOUT_SECONDS:-8}  # above order's budget (orders.md)
     depends_on:
       auth:
         condition: service_healthy
@@ -82,8 +85,8 @@ services:
       <<: *otel-env
       DATABASE_URL: postgresql://order_svc:order_svc@postgres:5432/${POSTGRES_DB:-orders}
       PAYMENT_URL: http://payment:8000
-      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-30}  # sized for ~10 rps with slow writes; 37 non-superuser slots
-      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS:-5}
+      DB_POOL_MAX_SIZE: ${DB_POOL_MAX_SIZE:-30}  # sized for ~10 rps with slow writes; 35 non-superuser slots
+      HTTP_TIMEOUT_SECONDS: ${ORDER_HTTP_TIMEOUT_SECONDS:-5}
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -104,8 +107,10 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    # Small enough that connection exhaustion is practical; 3 slots stay reserved for superusers.
-    command: ["postgres", "-c", "max_connections=40"]
+    restart: unless-stopped
+    # Small enough that connection exhaustion is practical. 5 slots stay reserved for superusers: exporter,
+    # injector admin, exhaustion admin and lock contention can all connect while the normal slots are full.
+    command: ["postgres", "-c", "max_connections=40", "-c", "superuser_reserved_connections=5"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
@@ -138,6 +143,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -150,6 +156,7 @@ services:
 
   fault-injector:
     build: ./services/fault-injector
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${FAULT_INJECTOR_PORT:-8090}:8000"
     environment:
@@ -161,6 +168,11 @@ services:
       - faultdata:/data
       - edgeconf:/edge
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:  # the datastore mechanisms need them, and the `reporting` role from the migrations
+      db-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck: *python-healthcheck
     networks: [backend]
 
@@ -168,6 +180,7 @@ services:
   # touches the system through the fault-injector API and the public nginx entry point.
   experiment-runner:
     build: ./services/experiment-runner
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${EXPERIMENT_RUNNER_PORT:-8091}:8000"
     environment:
@@ -182,6 +195,8 @@ services:
         condition: service_healthy
       nginx:
         condition: service_healthy
+      prometheus:
+        condition: service_healthy
     healthcheck: *python-healthcheck
     networks: [backend]
 
@@ -189,12 +204,13 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.5.0
+    restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=2d
       - --web.enable-remote-write-receiver   # Tempo metrics-generator (service graph, span metrics)
     ports:
-      - "${PROMETHEUS_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"  # remote-write receiver on: not for the LAN
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     healthcheck:
@@ -206,31 +222,47 @@ services:
 
   loki:
     image: grafana/loki:3.5.3
+    restart: unless-stopped
     command: ["-config.file=/etc/loki/config.yml"]
     volumes:
       - ./loki/config.yml:/etc/loki/config.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3100/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks: [backend]
 
   tempo:
     image: grafana/tempo:2.8.2
+    restart: unless-stopped
     command: ["-config.file=/etc/tempo/config.yml"]
     volumes:
       - ./tempo/config.yml:/etc/tempo/config.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3200/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks: [backend]
 
   alloy:
     image: grafana/alloy:v1.10.0
+    restart: unless-stopped
     command: ["run", "--storage.path=/var/lib/alloy/data", "/etc/alloy/config.alloy"]
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on: [loki]
+    depends_on:
+      loki:
+        condition: service_healthy
     networks: [backend]
 
   grafana:
     image: grafana/grafana:12.1.0
+    restart: unless-stopped
     ports:
-      - "${GRAFANA_PORT:-3000}:3000"
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"  # anonymous Admin: not for the LAN
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
@@ -251,21 +283,29 @@ services:
 
   nginx-exporter:
     image: nginx/nginx-prometheus-exporter:1.4.2
+    restart: unless-stopped
     command: ["--nginx.scrape-uri=http://nginx:8081/stub_status"]
     depends_on: [nginx]
     networks: [backend]
 
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
     environment:
       DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-orders}?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9187/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks: [backend]
 
   redis-exporter:
     image: oliver006/redis_exporter:v1.74.0
+    restart: unless-stopped
     environment:
       REDIS_ADDR: redis://redis:6379
     depends_on:

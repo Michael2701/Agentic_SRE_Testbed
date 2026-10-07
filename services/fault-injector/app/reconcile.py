@@ -1,7 +1,8 @@
 """Drives the system towards the desired state implied by the active faults.
 
 `enforce` is idempotent and runs after every API change and every few seconds, so faults survive restarts
-of the injector or of their targets. `revert` undoes a single fault given the faults that remain active.
+of the injector or of their targets; it reports errors per fault instead of stopping at the first one.
+`revert` undoes a single fault given the faults that remain active.
 """
 
 import asyncio
@@ -12,7 +13,7 @@ import httpx
 from app.catalog import BACKGROUND_MECHANISMS, FAULT_TYPES, FAULTPOINT_SERVICES
 from app.datastores import Postgres, Redis
 from app.deploy import Deployer
-from app.docker_api import Docker
+from app.docker_api import Docker, DockerError
 from app.edge import Edge
 from app.limits import CpuLimits
 from app.network import Network
@@ -50,6 +51,12 @@ def faultpoint_config(active: list[dict], service: str) -> dict:
     return config
 
 
+def faultpoint_faults(active: list[dict], service: str) -> list[dict]:
+    """The active faults that contribute to `faultpoint_config(active, service)`."""
+    return [f for f in active if f["target"] == service and (
+        mechanism(f) == "faultpoint" or (f["type"] == "bad_deployment" and f["parameters"]["defect"] in ("errors", "slow")))]
+
+
 def container_targets(active: list[dict], kind: str) -> set[str]:
     return {f["target"] for f in active if mechanism(f) == kind}
 
@@ -62,7 +69,7 @@ class Reconciler:
         self.redis = redis_
         self.workers = Workers(docker)
         self.network = Network(docker)
-        self.deployer = Deployer(docker, store, healthy_timeout)
+        self.deployer = Deployer(docker, store)
         self.edge = Edge(docker, edge_dir)
         self.cpu_limits = CpuLimits(docker, store)
         self.healthy_timeout = healthy_timeout
@@ -77,35 +84,71 @@ class Reconciler:
 
     # ---------------------------------------------------------------- enforce
 
-    async def enforce(self, active: list[dict]) -> None:
-        """Applies all active faults. Raises when an active fault cannot be realized."""
+    async def enforce(self, active: list[dict]) -> dict[str, str]:
+        """Applies all active faults; returns {fault id: error} for those that could not be realized.
+
+        Each step is isolated: one fault that cannot be realized (e.g. its container is gone) never keeps the
+        others from being enforced, and it never fails a new fault that has nothing to do with it.
+        """
+        errors: dict[str, str] = {}
+
+        async def attempt(faults: list[dict], step) -> None:
+            try:
+                await step
+            except Exception as exc:
+                if not faults:
+                    logger.warning("enforce_step_failed", extra={"error": repr(exc)})
+                for fault in faults:
+                    errors.setdefault(fault["id"], repr(exc))
+
         for fault in active:
-            if mechanism(fault) == "redeploy" and await self.deployer.ensure(fault):
-                if fault["type"] == "bad_deployment" and fault["parameters"]["defect"] != "crash":
-                    # the release's behaviour is pushed to its faultpoint below, so it must be up first
-                    await self.docker.wait_healthy(fault["target"], self.healthy_timeout)
-        for target in container_targets(active, "container_stop"):
-            await self.docker.stop(target)
-        for target in container_targets(active, "container_pause"):
-            await self.docker.pause(target)
+            if mechanism(fault) == "redeploy":
+                await attempt([fault], self._ensure_release(fault, active))
+        for kind, action in (("container_stop", self.docker.stop), ("container_pause", self.docker.pause)):
+            for target in container_targets(active, kind):
+                await attempt([f for f in active if mechanism(f) == kind and f["target"] == target], action(target))
         for fault in active:
             kind = mechanism(fault)
             if kind in ("exec_cpu", "exec_memory"):
-                await self.workers.ensure(fault)
+                await attempt([fault], self.workers.ensure(fault))
             elif kind == "pg_trigger":
-                await self.postgres.ensure_slow_trigger(fault["parameters"]["delay_ms"], fault["parameters"]["operations"])
+                params = fault["parameters"]
+                await attempt([fault], self.postgres.ensure_slow_trigger(params["delay_ms"], params["operations"]))
             elif kind == "netns":
-                await self.network.ensure(fault)
+                await attempt([fault], self.network.ensure(fault))
             elif kind == "cpu_quota":
-                await self.cpu_limits.ensure(fault)
+                await attempt([fault], self.cpu_limits.ensure(fault))
             elif kind in BACKGROUND_MECHANISMS:
                 self._ensure_task(fault)
-        await self.edge.ensure(active)
-        await self.push_faultpoints(active)
+        await attempt([f for f in active if mechanism(f) == "edge_config"], self.edge.ensure(active))
+        for service, error in (await self.push_faultpoints(active)).items():
+            for fault in faultpoint_faults(active, service):
+                errors.setdefault(fault["id"], error)
+        return errors
 
-    async def push_faultpoints(self, active: list[dict]) -> None:
+    async def _ensure_release(self, fault: dict, active: list[dict]) -> None:
+        if not await self.deployer.ensure(fault):
+            return
+        target = fault["target"]
+        if fault["type"] == "bad_deployment" and fault["parameters"]["defect"] != "crash":
+            # the release's behaviour is pushed to its faultpoint below, so it must be up first
+            await self.docker.wait_healthy(target, self.healthy_timeout)
+        elif faultpoint_config(active, target):
+            # other faults' faultpoint config is pushed below; a release that never gets healthy is this fault's
+            # symptom, not an error, so the push failure is left to the faultpoint faults (and retried)
+            try:
+                await self.docker.wait_healthy(target, self.healthy_timeout)
+            except DockerError as exc:
+                logger.warning("redeploy_not_healthy", extra={"target": target, "error": repr(exc)})
+
+    async def push_faultpoints(self, active: list[dict]) -> dict[str, str]:
+        """Pushes every faultpoint service its config; returns {service: error} for failed non-empty pushes.
+
+        A failed reset (empty config) is only logged: the next periodic pass pushes again anyway.
+        """
         unreachable = container_targets(active, "container_stop") | container_targets(active, "container_pause")
         unreachable |= {f["target"] for f in active if f["type"] == "bad_deployment" and f["parameters"]["defect"] == "crash"}
+        errors: dict[str, str] = {}
         for service in FAULTPOINT_SERVICES - unreachable:
             config = faultpoint_config(active, service)
             try:
@@ -118,7 +161,8 @@ class Reconciler:
                 # The service may be restarting; the next periodic pass retries.
                 logger.warning("faultpoint_push_failed", extra={"target": service, "error": repr(exc)})
                 if config:
-                    raise
+                    errors[service] = repr(exc)
+        return errors
 
     def _ensure_task(self, fault: dict) -> None:
         task = self._tasks.get(fault["id"])
@@ -138,15 +182,18 @@ class Reconciler:
 
     # ---------------------------------------------------------------- revert
 
-    async def revert(self, fault: dict, still_active: list[dict]) -> None:
+    async def revert(self, fault: dict, still_active: list[dict]) -> str | None:
+        """Undoes one fault. Raises when the undo fails; returns a warning when it worked but the target did not
+        become healthy in time (the fault is gone all the same, so re-applying it would be wrong)."""
         kind = mechanism(fault)
         target = fault["target"]
-        if kind == "container_stop" and target not in container_targets(still_active, "container_stop"):
-            await self.docker.resume_and_wait_healthy(target, self.healthy_timeout)
-        elif kind == "container_pause" and target not in container_targets(still_active, "container_pause"):
-            await self.docker.resume_and_wait_healthy(target, self.healthy_timeout)
+        warning = None
+        if kind in ("container_stop", "container_pause") and target not in container_targets(still_active, kind):
+            await self.docker.resume(target)
+            warning = await self._settle(target)
         elif kind == "redeploy":
             await self.deployer.restore(target)
+            warning = await self._settle(target)
         elif kind == "netns":
             await self.network.clear(fault)
         elif kind == "cpu_quota":
@@ -162,4 +209,13 @@ class Reconciler:
             if task is not None:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-        await self.push_faultpoints(still_active)
+        await self.push_faultpoints(still_active)  # failures belong to the remaining faults; the loop retries
+        return warning
+
+    async def _settle(self, target: str) -> str | None:
+        try:
+            await self.docker.wait_healthy(target, self.healthy_timeout)
+        except DockerError as exc:
+            logger.warning("revert_not_healthy", extra={"target": target, "error": repr(exc)})
+            return f"reverted, but {exc}"
+        return None

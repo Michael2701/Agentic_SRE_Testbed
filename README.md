@@ -62,16 +62,16 @@ Everything else lives on the internal `backend` network.
 make up     # build and start everything, waits until all containers are healthy
 make reset  # clean slate: revert faults, wipe all state (DB, fault/experiment history, telemetry), start, smoke
 make smoke  # ~5 s health check: order 201, no active faults, telemetry backends reachable
-make test   # run integration tests (in a container, through nginx)
+make test   # all tests: integration, faults, experiments (in a container, through nginx; ~17 min)
 make load   # steady traffic, e.g. make load RATE=10 DURATION=120
-make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}'   # inject a fault
+make fault TYPE=payment-latency PARAMS='{"latency_ms":2500}'   # inject a fault (PARAMS optional: defaults)
 make faults     # list active faults
 make recover    # remove all faults
-make test-faults   # only the fault tests (~5 min)
+make test-faults   # only the fault tests (~7 min)
 make scenarios                           # list experiment scenarios
 make experiment SCENARIO=payment-latency # run one experiment (~75s) and print the verdict
 make experiments                         # recorded experiments, with ground truth
-make test-experiments                    # only the experiment tests (~12 min, incl. challenges)
+make test-experiments                    # only the experiment tests (~13 min, incl. challenges)
 make test-challenges                     # only the M8 challenge scenarios (~10 min)
 make acceptance                          # every scenario end to end, shortened phases (~30 min)
 make acceptance ROUNDS=2 FULL=1 SCENARIOS="slow-redis slow-cpu"   # repeat / full durations / a subset
@@ -80,7 +80,9 @@ make logs   # follow logs
 make down   # stop the environment
 ```
 
-Configuration defaults live in `docker-compose.yml`; override them by copying `.env.example` to `.env`.
+Configuration defaults live in `docker-compose.yml`; override them by copying `.env.example` to `.env`
+(compose and the Makefile both read it). Grafana, Prometheus and the control-plane APIs listen on
+127.0.0.1 only; the app (nginx) on all interfaces.
 
 Demo users (fake auth by design): `alice:alice`, `bob:bob`.
 
@@ -93,7 +95,8 @@ POST /orders  → gateway → auth /validate (Redis) → order → INSERT pendin
                                                        → UPDATE paid → 201
 ```
 
-If the payment call fails, the order is stored as `payment_failed` and the API returns `502`.
+If the payment call fails, the order is stored as `payment_failed` and the API returns `502`. Timeouts nest
+(order → payment 5s < gateway → order 8s), so order always answers before the gateway gives up.
 
 ### Example session
 
@@ -177,13 +180,15 @@ API (`http://localhost:8090`, bound to localhost only):
 | GET | `/faults` | all faults, `?state=active\|removed\|failed` |
 | GET | `/faults/{id}` | one fault |
 | DELETE | `/faults/{id}` | remove (revert) one fault; it stays in history as `removed` |
-| DELETE | `/faults` | remove all active faults |
+| DELETE | `/faults` | remove all active faults (each one is tried; 502 with per-fault states if some fail) |
 
-Each fault has `id`, `experiment_id`, `type`, `target`, `parameters`, `created_at`/`updated_at` and `state`.
+Each fault has `id`, `experiment_id`, `type`, `target`, `parameters`, `created_at`/`updated_at`, `state` and
+`error` (e.g. why it can't be enforced right now). A fault that fails to apply is rolled back; if even that
+fails it is kept `failed` with `needs_cleanup`, and `DELETE` retries the cleanup.
 
 | Type | Target | Parameters | Mechanism (real where practical) |
 |---|---|---|---|
-| `payment_latency` | payment | `latency_ms`, `jitter_ms`, `probability` | app hook delays responses |
+| `payment_latency` | payment | `latency_ms` (=2000), `jitter_ms`, `probability` | app hook delays responses |
 | `payment_error` | payment | `status_code` (5xx), `probability` | app hook returns 5xx |
 | `intermittent_errors` | auth, order, payment | `error_rate`, `status_code` | app hook returns 5xx for a share of requests |
 | `service_unavailable` | payment, auth, order | — | container stopped (connection refused) |
@@ -196,13 +201,15 @@ Each fault has `id`, `experiment_id`, `type`, `target`, `parameters`, `created_a
 | `db_connection_exhaustion` | postgres | — | another role holds every normal connection slot |
 | `db_lock_contention` | postgres | `hold_ms`, `interval_ms` | periodic `LOCK TABLE orders IN SHARE MODE` |
 | `redis_latency` | redis | `pause_ms`, `interval_ms` | periodic `CLIENT PAUSE` |
-| `network_latency` | app services, postgres, redis | `delay_ms`, `jitter_ms`, `peer`? | `tc netem delay` in the target's network namespace (only towards `peer` if given) |
+| `network_latency` | app services, postgres, redis, nginx | `delay_ms`, `jitter_ms`, `peer`? | `tc netem delay` in the target's network namespace (only towards `peer` if given) |
 | `packet_loss` | same | `loss_percent`, `peer`? | `tc netem loss` |
 | `connection_failure` | gateway, auth, order | `peer`, `mode` (reject\|drop) | `iptables` rejects (TCP reset) or drops traffic to the peer |
 | `incorrect_endpoint` | gateway, order, auth | `dependency`, `endpoint`? | redeploy with a wrong dependency URL (default: host name typo) |
 | `incorrect_timeout` | gateway, order | `timeout_ms` (=5) | redeploy with a too-short HTTP timeout |
 | `bad_configuration` | gateway, order, auth | `settings` (allowlisted env vars) | redeploy with e.g. `DB_POOL_MAX_SIZE=1`, `TOKEN_TTL_SECONDS=2` |
-| `bad_deployment` | auth, order, payment | `version`, `defect` (crash\|errors\|slow), `error_rate`, `latency_ms` | redeploy as a new version that crash-loops, returns 5xx or is slow |
+| `bad_deployment` | auth, order, payment | `version`, `defect` (crash\|errors\|slow\|none), `error_rate`, `latency_ms` | redeploy as a new version that crash-loops, returns 5xx, is slow or is harmless |
+| `proxy_rate_limit` | nginx | `rate_rps`, `burst` | nginx `limit_req` rolled out with a graceful reload (503 beyond the rate) |
+| `proxy_bandwidth_limit` | nginx | `bytes_per_second` | nginx `limit_rate` rolled out with a graceful reload |
 
 Network faults run `tc`/`iptables` from a short-lived helper container that shares the target's network
 namespace; app images are unchanged. Redeploy faults recreate the target container (same name, image and

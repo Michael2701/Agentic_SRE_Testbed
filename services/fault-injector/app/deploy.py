@@ -32,10 +32,9 @@ def _merge(env: list[str], overrides: dict[str, str]) -> list[str]:
 
 
 class Deployer:
-    def __init__(self, docker: Docker, store: FaultStore, healthy_timeout: float):
+    def __init__(self, docker: Docker, store: FaultStore):
         self.docker = docker
         self.store = store
-        self.healthy_timeout = healthy_timeout
 
     async def ensure(self, fault: dict) -> bool:
         """Idempotent; returns True when the container was recreated just now."""
@@ -59,12 +58,13 @@ class Deployer:
         return True
 
     async def restore(self, service: str) -> None:
-        """Redeploys the baseline (if a changed release is running) and waits until it is healthy."""
-        baseline = self.store.baseline(service)
+        """Redeploys the baseline if a changed release is running (the caller waits for it to be healthy)."""
         container = await self.docker.container(service)
         labels = dict(container["Config"]["Labels"] or {})
-        if baseline is not None and labels.pop(LABEL, None) is not None:
+        if labels.pop(LABEL, None) is not None:
+            baseline = self.store.baseline(service)
+            if baseline is None:
+                raise DockerError(f"no saved baseline to restore {service}; recreate it with `make up`")
             env, cmd, restart = baseline
             await self.docker.recreate(container, env, cmd, labels, restart)
         self.store.delete_baseline(service)
-        await self.docker.wait_healthy(service, self.healthy_timeout)

@@ -37,7 +37,7 @@ def summarize(samples: list[Sample]) -> dict:
     orders = [s for s in samples if s.kind not in ("bad_login", "skipped")]
     latencies = [s.seconds for s in orders]
     count = len(orders)
-    span = (orders[-1].at - orders[0].at) if count > 1 else 0.0
+    span = (max(s.at for s in orders) - min(s.at for s in orders)) if count > 1 else 0.0
     return {
         "requests": count,
         "rps": round(count / span, 2) if span else 0.0,
@@ -62,7 +62,8 @@ class Traffic:
         self._client: httpx.AsyncClient | None = None
 
     def window(self, start: float, end: float) -> list[Sample]:
-        return [s for s in self.samples if start <= s.at < end]
+        """Samples started in [start, end), by start time (they are recorded when they finish)."""
+        return sorted((s for s in self.samples if start <= s.at < end), key=lambda s: s.at)
 
     async def settle(self, before: float, timeout: float = 11) -> None:
         """Waits until requests started before `before` finished, so slow ones count in their window."""
@@ -102,8 +103,10 @@ class Traffic:
                 next_tick += interval
                 await asyncio.sleep(max(0.0, next_tick - time.monotonic()))
         finally:
-            for task in pending:
+            unfinished = list(pending)
+            for task in unfinished:
                 task.cancel()
+            await asyncio.gather(*unfinished, return_exceptions=True)  # before `stop` closes the client
 
     async def _one(self, tokens: dict, order_ids: list) -> None:
         roll = random.random()

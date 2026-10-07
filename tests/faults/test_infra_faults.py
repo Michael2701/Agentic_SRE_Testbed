@@ -11,8 +11,8 @@ import httpx
 import pytest
 
 from conftest import (
-    DEMO_USER, ORDER_METRICS, PAYMENT_METRICS, eventually, five_xx_ratio, inject, loki_streams, median_latency,
-    metric_value, place_order, prom_value, sample, status_becomes,
+    DEMO_USER, ORDER_METRICS, PAYMENT_METRICS, eventually, five_xx_ratio, inject, loki_caught_up, loki_streams,
+    median_latency, metric_value, place_order, prom_value, sample, status_becomes,
 )
 
 pytestmark = pytest.mark.usefixtures("recover_after")
@@ -61,8 +61,8 @@ def test_network_fault_reapplied_after_container_restart(faults, client, token):
     inject(faults, "network_latency", "payment", delay_ms=300)
     outage = inject(faults, "service_unavailable", "payment")
     faults.delete(f"/faults/{outage['id']}")  # payment starts again in a fresh network namespace
-    time.sleep(3)  # one reconcile pass re-installs the qdisc
-    assert all(elapsed >= 0.3 for _, elapsed in sample(client, token, 3))
+    # a reconcile pass re-installs the qdisc
+    assert eventually(lambda: all(elapsed >= 0.3 for _, elapsed in sample(client, token, 3)), timeout=30)
 
 
 def test_packet_loss_tail_latency(faults, client, token):
@@ -88,7 +88,10 @@ def test_connection_failure_reject(faults, client, token):
 def test_connection_failure_drop(faults, client, token):
     inject(faults, "connection_failure", "order", peer="payment", mode="drop")
     response, elapsed = place_order(client, token)
-    assert response.status_code == 504 and elapsed >= 4.5  # packets vanish: a timeout, not a refusal
+    # Packets vanish: a timeout, not a refusal. Order's payment call times out (5 s) before the gateway gives up
+    # on order (8 s), so order answers 502 and records the failed payment.
+    assert response.status_code == 502 and elapsed >= 4.5
+    assert response.json()["order"]["status"] == "payment_failed"
 
 
 # ---------------------------------------------------------------- redeploys (env / entrypoint)
@@ -195,7 +198,7 @@ def test_no_mechanism_names_in_logs(faults, client, token):
     inject(faults, "bad_configuration", "auth", settings={"TOKEN_TTL_SECONDS": 600})
     wait_up("http://auth:8000/health")
     sample(client, token, 3)
-    time.sleep(3)
+    loki_caught_up(client, token)
     # The test runner's own output (e.g. a failed assertion quoting a fault id) is not the diagnostic plane.
     for needle in ("netem", "iptables", "io.testbed", "flt-"):
         assert loki_streams(f'{{service=~".+", service!="tests"}} |= "{needle}"', since="1h") == [], needle

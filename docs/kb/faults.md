@@ -15,7 +15,7 @@ symptoms**:
   tests check that Loki never contains them (logs of the `tests` runner are excluded: a failed assertion
   quoting a fault id would otherwise fail every later run).
 - netns helper containers have no compose labels, so Alloy never discovers them (it filters on the
-  compose project label).
+  compose project label). Their own label `io.testbed.helper` only lets the startup sweep find them.
 - Verified by `test_control_plane_invisible_to_diagnostic_plane`.
 - ⚠️ If `alloy/config.alloy` changes while the stack is running, `make up` does **not** reload it (a bind
   mount; compose sees no change), and logs shipped before the Alloy restart stay in Loki. Use
@@ -31,7 +31,21 @@ symptoms**:
   fault can't be applied (stored `failed`) or reverted (stays `active` with `error`).
 - Model: `id` `flt-<hex>`, `experiment_id` (`[A-Za-z0-9._-]{1,64}`, default `adhoc-<hex>`), `type`,
   `target`, `parameters` (validated and defaults filled), `state` active|removed|failed, `error`,
-  `created_at`, `updated_at`. Removed faults stay as history.
+  `needs_cleanup`, `created_at`, `updated_at`. Removed faults stay as history.
+- **Error isolation (M10).** `enforce` attempts every step and returns `{fault id: error}`; one fault that
+  can't be realized never stops the others or fails an unrelated new fault. The loop shows it on the fault
+  (`error` = `enforce failed: …`, cleared once a pass succeeds); `POST` fails only if the new fault's own
+  step failed. Faultpoint push errors are charged to the faultpoint faults of that service.
+- **Failed apply.** The new fault is rolled back (`revert`). If the rollback fails too, it is stored `failed`
+  with `needs_cleanup=true`: `DELETE /faults/{id}` and `DELETE /faults` retry the revert, and it blocks
+  conflicting faults (409) until then.
+- **Revert.** A revert that undid the fault but whose target didn't get healthy in time still counts:
+  `removed` with a warning in `error` (otherwise the next pass would re-inject it). `DELETE /faults` tries
+  every fault and retries the failed ones once (a revert can depend on another, e.g. hogs in a paused
+  container); if some still fail: 502 `{detail, faults}` with each fault's state.
+- **Startup sweep** (`Docker.sweep`): removes helper containers and `<name>-prev` leftovers of an injector
+  that died mid-operation (a `-prev` without a sibling is renamed back and started). Shutdown cancels the
+  loop under the lock, never mid-redeploy.
 - Files: `app/catalog.py` (types: param schemas with `extra="forbid"`, targets, mechanism),
   `app/store.py` (SQLite `/data/faults.db` on volume `faultdata`, stdlib), `app/docker_api.py`
   (Docker Engine API over the unix socket via httpx; container found by compose labels),
@@ -42,13 +56,13 @@ symptoms**:
 ## Types (`services/fault-injector/app/catalog.py`)
 | type | target | params | mechanism | revert |
 |---|---|---|---|---|
-| `payment_latency` | payment | `latency_ms`, `jitter_ms`=0, `probability`=1 | faultpoint | config cleared |
+| `payment_latency` | payment | `latency_ms`=2000, `jitter_ms`=0, `probability`=1 | faultpoint | config cleared |
 | `payment_error` | payment | `status_code`=500, `probability`=1 | faultpoint | config cleared |
 | `intermittent_errors` | auth, order, payment | `error_rate`=0.3, `status_code`=500 | faultpoint | config cleared |
 | `service_unavailable` | payment, auth, order | — | `docker stop` | start + wait healthy |
 | `redis_unavailable` | redis | — | `docker stop` | start + wait healthy |
 | `dependency_timeout` | auth, order, payment | — | `docker pause` (TCP accepted, no reply → caller read timeout) | unpause + wait healthy |
-| `cpu_saturation` | gateway, auth, order, payment | `workers` 1–8 (=2) | busy-loop python processes via docker exec | kill pids |
+| `cpu_saturation` | gateway, auth, order, payment | `workers` 1–32 (=2) | busy-loop python processes via docker exec | kill pids |
 | `cpu_limit` (M9) | gateway, auth, order, payment | `cpus` 0.01–4 (=0.1) | `POST /containers/{id}/update {NanoCpus}` (= `docker update --cpus`), in place, no restart; compose quota saved in table `cpu_baselines` (`limits.py`) | update back to the saved quota |
 | `memory_pressure` | same | `mb` 16–2048 (=200) | a python process allocating and touching `mb` MiB | kill pid |
 | `db_slow_query` | postgres | `delay_ms`, `operations` ⊆ {insert, update} | `BEFORE` trigger `orders_write_hook` with `pg_sleep` | drop trigger + function |
@@ -63,8 +77,10 @@ symptoms**:
 | `bad_configuration` | gateway, order, auth | `settings` {KEY: value}, allowlist `catalog.CONFIG_SETTINGS` | redeploy with those env vars | same |
 | `bad_deployment` | auth, order, payment | `version`="1.1.0", `defect` crash\|errors\|slow, `error_rate`=0.5, `latency_ms`=800 | redeploy with `SERVICE_VERSION`; crash: entrypoint `app.main:application` + restart on-failure (crash loop); errors/slow: faultpoint config of the new release | same |
 
-- **Mechanism modules:** `docker_api.py` (stop/pause/exec/resume), `workers.py` (exec hogs: pidfile check
-  every pass, relaunch if the container restarted or OOM killed the hog), `datastores.py` (Postgres
+- **Mechanism modules:** `docker_api.py` (stop/pause/exec/resume; a service's container is the one without
+  the `-prev` suffix), `workers.py` (exec hogs: pidfile check every pass, relaunch if the container restarted
+  or OOM killed the hog; skipped while the container is stopped/paused, and their revert refuses a paused
+  container, whose frozen hogs would resume), `datastores.py` (Postgres
   trigger/exhaustion/lock, Redis pause), `reconcile.py` (`enforce` idempotent; background tasks
   supervised per fault id and restarted if they die).
 - **Conflicts** (`catalog.conflict_key`): same (type, target); one of stop/pause/redeploy per container
@@ -74,9 +90,10 @@ symptoms**:
   `observability.instrument(app)`** so the service's own access log/RED metrics record injected
   latency/5xx. Multiple error faults on one service: the highest probability wins.
 - Periodic params: `interval_ms` must be > `hold_ms`/`pause_ms` (validator).
-- Connection budget: `max_connections=40`, 3 reserved for superusers (exporter, injector admin,
-  exhaustion admin). The app uses the non-superuser `order_svc`, so exhaustion is deterministic while
-  operators still get in.
+- Connection budget: `max_connections=40`, 5 reserved for superusers (exporter, injector admin,
+  exhaustion admin, lock contention, one operator `psql`). The app uses the non-superuser `order_svc`, so
+  exhaustion is deterministic while operators still get in. (M10: was 3, so lock contention could not
+  connect while exhaustion was active.)
 
 ## M8 additions
 - `nginx` is a netns target; `proxy_bandwidth_limit` / `proxy_rate_limit` (mechanism `edge_config`,
@@ -84,6 +101,8 @@ symptoms**:
   nginx's config *directory* is mounted, see stage0.md; `burst=0` is omitted because nginx rejects it); `bad_deployment
   defect=none` (harmless release). Details and conflicts: [challenges.md](challenges.md).
 - `cpu_saturation.workers` limit 8 → 32.
+- Edge snippets: `Edge` remembers what nginx last loaded (in memory) and reloads until it succeeds; after
+  an injector restart it reloads once.
 
 ## M6 mechanisms
 **netns** (`network.py`): `Docker.run_helper` starts a throwaway container from the injector's **own image**
@@ -93,7 +112,8 @@ script and removes it. The rules live in the target's namespace; app images are 
 filter, so only that edge is shaped. `ensure` caches `(container id, StartedAt, peer ip)` per fault: a
 restart/recreate of the target (new netns) or of the peer (new IP) re-installs the rules on the next pass;
 otherwise nothing runs. The cache is in memory, so after an injector restart the scripts run once more
-(they start with a reset, so they are idempotent). A stopped/paused target or a stopped peer is skipped.
+(they start with a reset, so they are idempotent). A stopped/paused target or a stopped peer is skipped on
+apply; `clear` also runs for a **paused** target (it keeps its namespace and rules; the helper can join it).
 - Without `peer`, all egress of the target is shaped, including its answers to Prometheus scrapes and
   OTLP exports (realistic: a sick NIC affects everything).
 - packet_loss mostly adds tens of ms (TCP tail-loss probes); only some requests hit an RTO/SYN retry and
@@ -101,15 +121,16 @@ otherwise nothing runs. The cache is in memory, so after an injector restart the
 
 **redeploy** (`deploy.py`, `Docker.recreate`): the target container is replaced like a new release: stop,
 rename the old one to `<name>-prev`, create the same name with the same image tag, host config and network
-aliases but a changed env/cmd/restart policy, start, remove the old one. If create fails, the old container
-is renamed back and restarted. Label `io.testbed.rev` = digest of the fault id; `ensure` only compares it
+aliases but a changed env/cmd/restart policy, start, remove the old one. If create or start fails, the new
+container is removed and the old one renamed back and restarted. Label `io.testbed.rev` = digest of the fault id; `ensure` only compares it
 (cheap). A container **without** the label was created by compose, so its env/cmd/restart policy is saved
-as the baseline (SQLite table `baselines`) before the first redeploy; `restore` redeploys the baseline, waits
-healthy and deletes the row. Compose accepts restored containers (labels incl. config-hash are copied):
+as the baseline (SQLite table `baselines`) before the first redeploy; `restore` redeploys the baseline (an
+error if the label is there but the row isn't) and deletes the row; `revert` then waits healthy. Compose accepts restored containers (labels incl. config-hash are copied):
 `make up` doesn't recreate them. `make up` after a rebuild does recreate them (a new image); the next pass
 sees no label, takes a new baseline and redeploys the fault again.
 - Apply doesn't wait for healthy (a crashing release is a valid outcome), except bad_deployment errors/slow,
-  whose faultpoint config is pushed right after the new container is up.
+  whose faultpoint config is pushed right after the new container is up, and a service with active faultpoint
+  faults (best effort: their config must be pushed into the new process).
 - `crash` needs restart on-failure: Alloy discovers only running/restarting containers, so logs of a
   container that exited for good never reach Loki. With the crash loop the uvicorn error
   (`Error loading ASGI app. Attribute "application" not found`) is shipped on every attempt.
@@ -128,9 +149,9 @@ sees no label, takes a new baseline and redeploys the fault again.
 5. Prefer real mechanisms (containers, network) over `sleep()` (`project.md` M6).
 
 ## Make targets
-`make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' [TARGET=...] [EXP=...]` (kebab → snake),
-`make faults` (active), `make recover` (DELETE all), `make test-faults` (only fault tests, ~3 min).
-The host uses curl against `localhost:8090`.
+`make fault TYPE=payment-latency [PARAMS='{"latency_ms":2500}'] [TARGET=...] [EXP=...]` (kebab → snake),
+`make faults` (active), `make recover` (DELETE all), `make test-faults` (only fault tests, ~7 min).
+The host uses curl against `localhost:$FAULT_INJECTOR_PORT` (from `.env`); a non-2xx answer fails the target.
 
 ## Symptom → possible root causes (M5 DoD, verified by tests; seed for M8)
 | external symptom on `POST /orders` | root causes that produce it | distinguishing evidence |
@@ -144,7 +165,7 @@ The host uses curl against `localhost:8090`.
 | 5xx | payment_error / intermittent_errors | 5xx at payment itself (its RED metrics); 502 from order |
 | | db_connection_exhaustion | **500** from order; `pg_stat_activity_count{usename="reporting"}` ≈ limit |
 | | redis_unavailable | 502 from gateway (auth 500 on validate); `redis_up`=0 |
-| | dependency_timeout(payment) | ~5s then **504** (gateway and order timeouts are both 5s: gateway gives up first); `outcome="timeout"` |
+| | dependency_timeout(payment) | ~5s then **502** from order (its payment call times out; the order is stored `payment_failed`); `outcome="timeout"`. On auth/order: **504** from the gateway after 8s |
 | | service_unavailable | fast 502; `outcome="error"` (connection refused) |
 | none externally | memory_pressure | `container_memory_usage_bytes` near limit, memory PSI, possible OOM kills |
 
@@ -158,10 +179,10 @@ M6 additions (verified by `tests/faults/test_infra_faults.py`):
 | | incorrect_endpoint | `dependency_call_failed` "Name or service not known"; the client just restarted (uptime reset); peer receives nothing |
 | | bad_deployment crash | peer `up=0`, crash loop: repeated `Error loading ASGI app` in its logs, new `version` field (≠ clean stop: no logs) |
 | | bad_deployment errors | 5xx at the service itself (its RED metrics) starting with a new `version` |
-| 504 | connection_failure drop | ~5s, `outcome="timeout"` like dependency_timeout, but the peer is healthy and answers others |
-| | incorrect_timeout | 504 after only ms (duration ≈ timeout), dependencies healthy, their server spans fast |
+| slow 502 | connection_failure drop | ~5s, `outcome="timeout"` like dependency_timeout, but the peer is healthy and answers others (M10: was 504, when gateway and order both had 5s) |
+| 504 | incorrect_timeout | 504 after only ms (duration ≈ timeout), dependencies healthy, their server spans fast |
 | 401 | bad_configuration TOKEN_TTL_SECONDS=2 | `expires_in` 2 on login; auth restarted (uptime reset); Redis fine |
-| none until load/slow DB | bad_configuration DB_POOL_MAX_SIZE=1 | amplifier: with db_slow_query 50ms, p95 0.24s → 9.7s and 91% 5xx at 20 rps (pool queueing, no slower SQL) |
+| none until load/slow DB | bad_configuration DB_POOL_MAX_SIZE=1 | amplifier: with db_slow_query 50ms, p95 0.24s → 9.7s and 91% 5xx at 20 rps (pool queueing, no slower SQL; measured in M6 with a 5s gateway timeout) |
 
 Probe gotcha: periodic faults (lock, redis pause) hit only requests that land in the hold window. A
 burst of sequential requests fits into one free window and looks healthy, so sample over time (tests

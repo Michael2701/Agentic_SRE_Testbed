@@ -3,7 +3,7 @@ CPU quota / memory limit. The images' own python is used; each process writes a 
 and killed. Neutral names: nothing inside the container says "fault".
 """
 
-from app.docker_api import Docker
+from app.docker_api import Docker, DockerError
 
 _CPU = "import os,sys\nopen(sys.argv[1],'w').write(str(os.getpid()))\nwhile True: pass"
 _MEMORY = (
@@ -28,12 +28,19 @@ class Workers:
         return await self.docker.exec(service, ["sh", "-c", check]) == 0
 
     async def kill(self, service: str, fault_id: str) -> None:
+        state = (await self.docker.container(service))["State"]
+        if not state["Running"]:
+            return  # the processes died with the container
+        if state["Paused"]:  # frozen, not gone: they would resume hogging once the container is unpaused
+            raise DockerError(f"cannot stop the workers in {service} while it is paused; remove the pause first")
         script = f'for f in {_glob(fault_id)}; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; rm -f "$f"; done; true'
         await self.docker.exec(service, ["sh", "-c", script])
 
     async def ensure(self, fault: dict) -> None:
         """Idempotent: (re)starts the hogs if any is missing, e.g. after a container restart or an OOM kill."""
         service, fault_id, params = fault["target"], fault["id"], fault["parameters"]
+        if not await self.docker.is_available(service):
+            return  # another fault stopped/paused it (no exec possible); the hogs restart once it runs again
         if await self.running(service, fault_id):
             return
         await self.kill(service, fault_id)

@@ -8,9 +8,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
-COPY libs/observability /libs/observability
+# Dependencies first (layer cached until a requirements file or a lib's pyproject changes): the libs are
+# installed from a stub with just their pyproject, then their sources on top without dependencies.
 COPY services/gateway/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt "/libs/observability[http]"
+COPY libs/observability/pyproject.toml /libs/observability/
+RUN mkdir /libs/observability/observability \
+    && pip install --no-cache-dir -r requirements.txt "/libs/observability[http]"
+COPY libs/observability /libs/observability
+RUN pip install --no-cache-dir --no-deps --force-reinstall /libs/observability
 
 COPY services/gateway/app ./app
 

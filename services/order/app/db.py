@@ -8,18 +8,30 @@ ORDER_COLUMNS = (
 )
 
 
-async def create_pool(dsn: str, min_size: int, max_size: int) -> asyncpg.Pool:
+# Waiting for a pooled connection (asyncpg's Pool.fetchrow has no acquire timeout) and for a query.
+_timeout: float | None = None
+
+
+async def create_pool(dsn: str, min_size: int, max_size: int, timeout: float) -> asyncpg.Pool:
+    global _timeout
+    _timeout = timeout
     return await asyncpg.create_pool(
-        dsn=dsn, min_size=min_size, max_size=max_size, server_settings={"application_name": "order"}
+        dsn=dsn, min_size=min_size, max_size=max_size, timeout=timeout, command_timeout=timeout,
+        server_settings={"application_name": "order"},
     )
+
+
+async def _fetchrow(pool: asyncpg.Pool, query: str, *args) -> asyncpg.Record | None:
+    async with pool.acquire(timeout=_timeout) as connection:
+        return await connection.fetchrow(query, *args)
 
 
 async def insert_pending_order(
     pool: asyncpg.Pool, user_id: str, item: str, quantity: int, amount_cents: int, currency: str
 ) -> asyncpg.Record:
     async with track("postgres", "insert_order"):
-        return await pool.fetchrow(
-            f"""
+        return await _fetchrow(
+            pool, f"""
             INSERT INTO orders (user_id, item, quantity, amount_cents, currency, status)
             VALUES ($1, $2, $3, $4, $5, 'pending')
             RETURNING {ORDER_COLUMNS}
@@ -32,8 +44,8 @@ async def update_order_status(
     pool: asyncpg.Pool, order_id: uuid.UUID, status: str, payment_id: str | None = None
 ) -> asyncpg.Record:
     async with track("postgres", "update_order_status"):
-        return await pool.fetchrow(
-            f"""
+        return await _fetchrow(
+            pool, f"""
             UPDATE orders SET status = $2, payment_id = $3, updated_at = now()
             WHERE id = $1
             RETURNING {ORDER_COLUMNS}
@@ -44,7 +56,7 @@ async def update_order_status(
 
 async def get_order(pool: asyncpg.Pool, order_id: uuid.UUID, user_id: str) -> asyncpg.Record | None:
     async with track("postgres", "get_order"):
-        return await pool.fetchrow(
-            f"SELECT {ORDER_COLUMNS} FROM orders WHERE id = $1 AND user_id = $2",
+        return await _fetchrow(
+            pool, f"SELECT {ORDER_COLUMNS} FROM orders WHERE id = $1 AND user_id = $2",
             order_id, user_id,
         )
