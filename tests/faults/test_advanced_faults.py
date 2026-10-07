@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 from conftest import (
-    AUTH_METRICS, ORDER_METRICS, eventually, five_xx_ratio, inject, loki_streams, median_latency, metric_value,
-    place_order, prom_value, sample,
+    AUTH_METRICS, ORDER_METRICS, eventually, five_xx_ratio, inject, loki_caught_up, loki_streams, median_latency,
+    metric_value, place_order, prom_value, sample,
 )
 
 pytestmark = pytest.mark.usefixtures("recover_after")
@@ -149,7 +149,7 @@ def test_no_mechanism_names_in_logs(faults, client, token):
     inject(faults, "db_slow_query", delay_ms=50)
     inject(faults, "cpu_saturation", "payment", workers=1)
     sample(client, token, 3)
-    time.sleep(3)
+    loki_caught_up(client, token)
     # The test runner's own output (e.g. a failed assertion quoting a fault id) is not the diagnostic plane.
     for needle in ("orders_write_hook", "/tmp/.w-", "flt-"):
         assert loki_streams(f'{{service=~".+", service!="tests"}} |= "{needle}"', since="1h") == [], needle

@@ -48,6 +48,7 @@ def test_challenge_catalog(runner):
 @pytest.mark.parametrize("scenario", SAME_SYMPTOM)
 def test_same_symptom(runner, scenario):
     response = runner.post("/experiments", params={"wait": "true"}, json={"scenario": scenario, "overrides": SHORT})
+    assert response.status_code == 202, response.text
     experiment = response.json()
     assert experiment["state"] == "completed", experiment["error"]
     observed = experiment["results"]["observe"]

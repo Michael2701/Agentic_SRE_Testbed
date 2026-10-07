@@ -55,5 +55,6 @@ class Network:
     async def clear(self, fault: dict) -> None:
         self._applied.pop(fault["id"], None)
         container = await self.docker.container(fault["target"])
-        if container["State"]["Running"] and not container["State"]["Paused"]:
+        # A paused container keeps its namespace and the rules in it; the helper joins it all the same.
+        if container["State"]["Running"]:
             await self.docker.run_helper(container["Id"], RESET)

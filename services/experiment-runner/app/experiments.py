@@ -95,8 +95,9 @@ def incident_onset(traffic: Traffic, baseline: dict, start: float, end: float, w
     """Start of the first window with symptoms: when the incident became visible, not when faults went in."""
     slow = max(2 * baseline["p95_s"], baseline["p95_s"] + 0.05)
     at = start
-    while at + window <= end:
-        samples = traffic.window(at, at + window)
+    while at < end:
+        stop = min(at + window, end)  # the last window may be shorter
+        samples = traffic.window(at, stop)
         found = symptoms(baseline, summarize(samples))
         if found:
             # The first request in that window that shows one of the symptoms (precise to one request).
@@ -108,6 +109,8 @@ def incident_onset(traffic: Traffic, baseline: dict, start: float, end: float, w
                         or ("auth_errors" in found and sample.status == 401)):
                     return sample.at
             return at
+        if stop == end:
+            break
         at += window / 2  # half-overlapping windows
     return None
 
@@ -148,6 +151,10 @@ class Injector:
             raise ExperimentError(f"inject {spec['type']}: HTTP {response.status_code} {response.text}")
         return response.json()
 
+    async def faults_of(self, experiment_id: str) -> list[str]:
+        """Active faults tagged with the experiment, including any whose injection response was lost."""
+        return [f["id"] for f in await self.active_faults() if f["experiment_id"] == experiment_id]
+
     async def remove(self, fault_id: str) -> None:
         response = await self._http.delete(f"/faults/{fault_id}")
         if response.status_code not in (200, 404):
@@ -161,6 +168,7 @@ class Runner:
         self.base_url = base_url
         self._prometheus = httpx.AsyncClient(base_url=prometheus_url, timeout=10)
         self.task: asyncio.Task | None = None
+        self.experiment_id: str | None = None  # the one `task` runs
 
     async def aclose(self) -> None:
         if self.task is not None:
@@ -179,15 +187,25 @@ class Runner:
             "domains": {}, "verdict": None,
         })
         self.task = asyncio.create_task(self._run(experiment, scenario))
+        self.experiment_id = experiment["id"]
+        return experiment
+
+    def is_running(self, experiment_id: str) -> bool:
+        return self.busy and self.experiment_id == experiment_id
+
+    async def abort_stale(self, experiment: dict, reason: str) -> dict:
+        """An experiment still `running` without a task (the runner restarted): removes its faults."""
+        errors = await self._remove_faults(experiment)
+        experiment.update(state="aborted", error="; ".join([reason, *errors]))
+        self.store.save(experiment)
+        logger.warning("experiment_aborted", extra={"experiment_id": experiment["id"]})
         return experiment
 
     async def abort_leftovers(self) -> None:
         """After a runner restart: experiments still `running` lost their task; remove their faults."""
         for experiment in self.store.list("running"):
-            await self._remove_faults(experiment)
-            experiment.update(state="aborted", error="runner restarted during the experiment")
-            self.store.save(experiment)
-            logger.warning("experiment_aborted", extra={"experiment_id": experiment["id"]})
+            if not self.is_running(experiment["id"]):
+                await self.abort_stale(experiment, "runner restarted during the experiment")
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -242,7 +260,9 @@ class Runner:
             judge_domains(experiment["domains"])
 
             self._enter(experiment, "remove")
-            await self._remove_faults(experiment)
+            errors = await self._remove_faults(experiment)
+            if errors:  # the system would not recover: this run isn't a valid experiment
+                raise ExperimentError("could not remove faults: " + "; ".join(errors))
 
             removed = self._enter(experiment, "recovery")
             experiment["incident"]["end"] = iso(removed)
@@ -262,19 +282,27 @@ class Runner:
             }
             experiment.update(state="completed", phase=None)
         except asyncio.CancelledError:
-            await self._remove_faults(experiment)
-            experiment.update(state="aborted", error="aborted")
+            errors = await self._remove_faults(experiment)
+            experiment.update(state="aborted", error="; ".join(["aborted", *errors]))
         except Exception as exc:
             logger.error("experiment_failed", extra={"experiment_id": experiment["id"], "error": repr(exc)})
-            await self._remove_faults(experiment)
-            experiment.update(state="failed", error=repr(exc))
+            errors = await self._remove_faults(experiment)
+            experiment.update(state="failed", error="; ".join([repr(exc), *errors]))
         finally:
             await traffic.stop()
             self.store.save(experiment)
 
     async def _inject(self, experiment: dict, spec, baseline_range: tuple[float, float], rate: float) -> None:
         parameters = await self._calibrate(spec, *baseline_range, rate)
-        fault = await self.injector.inject(spec.request(parameters), experiment["id"])
+        injection = asyncio.ensure_future(self.injector.inject(spec.request(parameters), experiment["id"]))
+        try:
+            fault = await asyncio.shield(injection)
+        except asyncio.CancelledError:  # aborted mid-request: let it finish so the fault is known and removed
+            self._record(experiment, await injection)
+            raise
+        self._record(experiment, fault)
+
+    def _record(self, experiment: dict, fault: dict) -> None:
         experiment["ground_truth"]["faults"].append(
             {key: fault[key] for key in ("id", "type", "target", "parameters", "created_at")})
         self.store.save(experiment)
@@ -301,12 +329,21 @@ class Runner:
             signals[domain] = {name: await self._query(expr.replace("$R", rng), at) for name, (expr, _) in queries.items()}
         return signals
 
-    async def _remove_faults(self, experiment: dict) -> None:
-        for fault in experiment["ground_truth"]["faults"]:
+    async def _remove_faults(self, experiment: dict) -> list[str]:
+        """Removes the experiment's faults; returns the errors (recorded on the experiment by the caller)."""
+        ids = [fault["id"] for fault in experiment["ground_truth"]["faults"]]
+        errors = []
+        try:
+            ids += [fault_id for fault_id in await self.injector.faults_of(experiment["id"]) if fault_id not in ids]
+        except Exception as exc:
+            errors.append(f"listing faults: {exc!r}")
+        for fault_id in ids:
             try:
-                await self.injector.remove(fault["id"])
+                await self.injector.remove(fault_id)
             except Exception as exc:  # the next attempt (or `make recover`) cleans up
                 logger.error("fault_remove_failed", extra={"experiment_id": experiment["id"], "error": repr(exc)})
+                errors.append(f"removing {fault_id}: {exc!r}")
+        return errors
 
     async def _verify_recovery(self, traffic: Traffic, baseline: dict, removed: float, durations) -> dict:
         """Consecutive windows after removal; the first one without symptoms proves recovery."""

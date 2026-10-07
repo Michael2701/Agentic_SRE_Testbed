@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -7,6 +8,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from observability import annotate_span, instrument
 from observability.http import instrumented_client
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
 from app.config import settings
 
@@ -17,9 +19,12 @@ logger = logging.getLogger("gateway")
 async def lifespan(app: FastAPI):
     app.state.auth = instrumented_client(settings.auth_url, "auth", settings.http_timeout_seconds)
     app.state.order = instrumented_client(settings.order_url, "order", settings.http_timeout_seconds)
+    # Readiness probes stay out of dependency metrics, logs and traces, like inbound probes (middleware.py).
+    app.state.probe = httpx.AsyncClient(timeout=settings.ready_timeout_seconds)
+    HTTPXClientInstrumentor.uninstrument_client(app.state.probe)
     yield
-    await app.state.auth.aclose()
-    await app.state.order.aclose()
+    for client in (app.state.auth, app.state.order, app.state.probe):
+        await client.aclose()
 
 
 app = FastAPI(title="gateway", lifespan=lifespan)
@@ -62,7 +67,10 @@ async def authenticate(authorization: str | None) -> str:
         raise HTTPException(status_code=401, detail="invalid or expired token")
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail=f"auth returned {response.status_code}")
-    user_id = response.json()["user_id"]
+    try:
+        user_id = response.json()["user_id"]
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=502, detail="auth returned an invalid response")
     annotate_span({"user.id": user_id})
     return user_id
 
@@ -99,13 +107,15 @@ async def health() -> dict:
 
 @app.get("/ready")
 async def ready() -> JSONResponse:
-    checks = {}
-    for name, client in (("auth", app.state.auth), ("order", app.state.order)):
+    async def check(url: str) -> str:
         try:
-            response = await client.get("/ready")
-            checks[name] = "ok" if response.status_code == 200 else f"status {response.status_code}"
+            response = await app.state.probe.get(f"{url}/ready")
+            return "ok" if response.status_code == 200 else f"status {response.status_code}"
         except httpx.HTTPError as exc:
-            checks[name] = f"error: {exc!r}"
+            return f"error: {exc!r}"
+
+    results = await asyncio.gather(check(settings.auth_url), check(settings.order_url))
+    checks = dict(zip(("auth", "order"), results))
     ok = all(value == "ok" for value in checks.values())
     return JSONResponse(
         status_code=200 if ok else 503,

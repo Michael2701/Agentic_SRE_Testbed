@@ -7,24 +7,29 @@
   resource `service.version`, gauge `app_build_info{version}` = 1. A redeploy shows up as a new series;
   Service Overview row *Releases* has "Running version" and "Process uptime" (`time() - process_start_time_seconds`).
 - `context.py`: `request_id_var` (contextvar) and `accept_or_generate()`, which keeps well-formed
-  incoming IDs (`[A-Za-z0-9._-]{1,128}`) and otherwise uses uuid4 hex.
+  incoming IDs (`[A-Za-z0-9._-]{1,128}`) and otherwise uses uuid4 hex. nginx applies the same pattern
+  (`map $http_x_request_id $req_id`), so nginx and the services always log the same ID.
 - `middleware.py`: pure ASGI middleware. It sets the request ID, echoes `x-request-id` in the response,
   and records `http_requests_total{method,route,status}` + `http_request_duration_seconds{method,route}`.
   `route` is the FastAPI template from `scope["route"].path` (or `unmatched`). It writes one `request`
-  log line per request (5xx → level error). `/health`, `/ready` and `/metrics` are skipped.
+  log line per request (5xx → level error). `/health`, `/ready` and `/metrics` are skipped. Methods outside
+  GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS become `OTHER` (label cardinality). An unhandled exception is
+  answered here (500 with `x-request-id`) unless the response had already started.
 - `logging.py`: `JsonFormatter`. Any `extra={...}` key becomes a top-level field; `request_id` is
   added from the contextvar and `trace_id`/`span_id` from the current OTel span (M3, see
   [tracing.md](tracing.md)). uvicorn loggers are re-routed, `uvicorn.access` is disabled (also
   `--no-access-log`), and `httpx` is set to WARNING.
 - `metrics.py`: `track(dependency, operation)` async context manager for non-HTTP deps
   (redis `set_token`/`get_token`; postgres `insert_order`/`update_order_status`/`get_order`).
-  Outcome is `success|timeout|error`.
+  Outcome is `success|timeout|error|cancelled` (timeout includes client libraries' own `TimeoutError`
+  classes, e.g. redis; cancelled = the awaiting request was cancelled, e.g. client disconnect).
 - `http.py` (extra `[http]`): `instrumented_client(base_url, dependency, timeout)` wraps
   `InstrumentedTransport`. It injects `X-Request-ID`, records `dependency_*` metrics with operation
-  `"METHOD /path"` (IDs collapsed to `{id}`), treats HTTP ≥500 as `error`, and logs
+  `"METHOD /path"` (IDs collapsed to `{id}`), treats HTTP ≥500 as `error` (`cancelled` as above), and logs
   `dependency_call_failed` (warning) on non-success.
 - Service name = Prometheus `job` label; metrics carry no `service` label.
-- Histogram `BUCKETS` start at 1ms (1, 2.5, 5, 7.5, 10, 25 ms …). With a 5ms first bucket, auth and payment
+- Histogram `BUCKETS` start at 1ms (1, 2.5, 5, 7.5, 10, 25 ms …) and end at 30s (15, 20, 30 added in M10:
+  injected latency goes up to 30s). With a 5ms first bucket, auth and payment
   (both <1ms) had an identical p95 of ~4.75ms. Baseline p95 at 10 rps: gateway POST /orders ≈23ms,
   order ≈7ms, auth ≈2ms, payment ≈1ms. This baseline is useful for judging fault impact later.
 - Business metrics are defined in each service: `logins_total{result}`,
@@ -33,7 +38,8 @@
 ## Stack (docker-compose)
 - Prometheus v3.5 (host :9090, 5s scrape, `prometheus/prometheus.yml`; jobs gateway, auth, order,
   payment, nginx, postgres, redis, prometheus).
-- Loki 3.5 (internal :3100, filesystem/tsdb, no retention config, no healthcheck: the image has no wget).
+- Loki 3.5 (internal :3100, filesystem/tsdb, 48h retention via the compactor, like Prometheus `2d` and Tempo;
+  healthcheck `/busybox/wget` → `/ready`).
 - Alloy v1.10 (`alloy/config.alloy`): docker discovery filtered by label
   `com.docker.compose.project=sre-testbed`, **refresh_interval 5s** (the 60s default missed containers
   started after Alloy). Labels are `service`, `container` and `level` (from JSON). request_id is NOT a

@@ -34,15 +34,29 @@ store = ExperimentStore(settings.database_path)
 lock = asyncio.Lock()
 
 
+LEFTOVER_RETRY_SECONDS = 5
+
+
+async def abort_leftovers(runner: Runner) -> None:
+    """Retries until the injector answers (it may still be starting when the runner comes up)."""
+    while True:
+        try:
+            async with lock:
+                await runner.abort_leftovers()
+            return
+        except Exception as exc:
+            logger.warning("abort_leftovers_failed", extra={"error": repr(exc)})
+            await asyncio.sleep(LEFTOVER_RETRY_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     injector = Injector(settings.fault_injector_url)
     app.state.runner = Runner(store, injector, settings.base_url, settings.prometheus_url)
-    try:
-        await app.state.runner.abort_leftovers()
-    except Exception as exc:  # the injector may still be starting; `make recover` also cleans up
-        logger.warning("abort_leftovers_failed", extra={"error": repr(exc)})
+    leftovers = asyncio.create_task(abort_leftovers(app.state.runner))
     yield
+    leftovers.cancel()
+    await asyncio.gather(leftovers, return_exceptions=True)
     await app.state.runner.aclose()
     await injector.aclose()
 
@@ -159,9 +173,14 @@ async def abort_experiment(experiment_id: str) -> dict:
     if experiment is None:
         raise HTTPException(404, "experiment not found")
     runner = app.state.runner
-    if experiment["state"] == "running" and runner.busy:
+    if runner.is_running(experiment_id):
         runner.task.cancel()
         await asyncio.gather(runner.task, return_exceptions=True)
+    elif experiment["state"] == "running":  # left over from before a runner restart
+        async with lock:
+            experiment = store.get(experiment_id)
+            if experiment["state"] == "running":
+                await runner.abort_stale(experiment, "aborted after a runner restart")
     return store.get(experiment_id)
 
 

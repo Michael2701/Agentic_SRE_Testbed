@@ -2,8 +2,9 @@
 
 nginx.conf includes `/etc/nginx/runtime/*-http.conf` (http context) and `*-location.conf` (the proxied
 location). The directory is the shared volume `edgeconf`: read-only for nginx, writable here (`/edge`).
-`ensure` renders the snippets for the active faults, and only when a file changes it rewrites it and runs
-`nginx -c <conf> -s reload` (a graceful reload, as operators do). Empty snippets = the original behaviour.
+`ensure` renders the snippets for the active faults and, when they differ from what nginx last loaded, writes
+them and runs `nginx -c <conf> -s reload` (a graceful reload, as operators do); a failed reload is retried on
+the next pass. Empty snippets = the original behaviour.
 """
 
 from pathlib import Path
@@ -34,20 +35,20 @@ class Edge:
     def __init__(self, docker: Docker, directory: str):
         self.docker = docker
         self.dir = Path(directory)
+        self._loaded: dict[str, str] | None = None  # snippets nginx runs with; unknown after an injector restart
 
     async def ensure(self, active: list[dict]) -> None:
+        wanted = render(active)
+        if wanted == self._loaded:
+            return
         self.dir.mkdir(parents=True, exist_ok=True)
-        changed = False
-        for name, content in render(active).items():
+        for name, content in wanted.items():
             path = self.dir / name
             if not path.exists() or path.read_text() != content:
                 path.write_text(content)
-                changed = True
-        if not changed:
-            return
         container = await self.docker.container("nginx")
-        if not container["State"]["Running"]:
-            return  # nginx reads the files when it starts
-        code = await self.docker.exec("nginx", ["nginx", "-c", NGINX_CONF, "-s", "reload"])
-        if code != 0:
-            raise DockerError(f"nginx reload failed (exit {code})")
+        if container["State"]["Running"]:  # otherwise nginx reads the files when it starts
+            code = await self.docker.exec("nginx", ["nginx", "-c", NGINX_CONF, "-s", "reload"])
+            if code != 0:
+                raise DockerError(f"nginx reload failed (exit {code})")
+        self._loaded = wanted

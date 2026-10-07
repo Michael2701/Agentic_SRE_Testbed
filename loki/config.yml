@@ -26,5 +26,14 @@ schema_config:
         prefix: index_
         period: 24h
 
+# Same retention as Prometheus and Tempo (2 days), so a recorded experiment can be cross-checked in all three.
+limits_config:
+  retention_period: 48h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
 analytics:
   reporting_enabled: false

@@ -10,6 +10,8 @@ logger = logging.getLogger("observability.access")
 UNOBSERVED_PATHS = frozenset({"/health", "/ready", "/metrics"})
 # Control-plane endpoints (fault injection). They must stay invisible to the diagnostic plane.
 CONTROL_PLANE_PREFIX = "/__"
+# Anything else becomes OTHER, so clients can't create label values (series) at will.
+KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
 
 def is_unobserved(path: str) -> bool:
@@ -31,12 +33,13 @@ class ObservabilityMiddleware:
         request_id = accept_or_generate(headers.get(REQUEST_ID_HEADER.lower()))
         token = request_id_var.set(request_id)
         status = 500
+        started = False
         start = time.perf_counter()
 
         async def send_with_request_id(message):
-            nonlocal status
+            nonlocal status, started
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status, started = message["status"], True
                 message["headers"] = [
                     *message.get("headers", []),
                     (REQUEST_ID_HEADER.lower().encode(), request_id.encode()),
@@ -46,9 +49,14 @@ class ObservabilityMiddleware:
         try:
             await self.app(scope, receive, send_with_request_id)
         except Exception:
-            status = 500
             logger.exception("unhandled_exception")
-            raise
+            if started:  # too late for an error response; the status already sent is what the client saw
+                raise
+            # Answered here rather than by Starlette's outer error middleware, so it carries the request ID.
+            status = 500
+            await send_with_request_id({"type": "http.response.start", "status": 500,
+                                        "headers": [(b"content-type", b"text/plain; charset=utf-8")]})
+            await send({"type": "http.response.body", "body": b"Internal Server Error"})
         finally:
             if not is_unobserved(scope["path"]):
                 self._record(scope, status, time.perf_counter() - start)
@@ -58,7 +66,7 @@ class ObservabilityMiddleware:
     def _record(scope, status: int, seconds: float) -> None:
         route = scope.get("route")
         route_path = getattr(route, "path", "unmatched")
-        method = scope["method"]
+        method = scope["method"] if scope["method"] in KNOWN_METHODS else "OTHER"
         HTTP_REQUESTS.labels(method, route_path, str(status)).inc()
         HTTP_DURATION.labels(method, route_path).observe(seconds)
         level = logging.ERROR if status >= 500 else logging.INFO

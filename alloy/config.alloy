@@ -14,10 +14,11 @@ discovery.docker "compose" {
 discovery.relabel "compose" {
   targets = []
 
-  // Control plane stays invisible to the diagnostic plane (ground truth must not leak into Loki).
+  // Control plane stays invisible to the diagnostic plane (ground truth must not leak into Loki). The test
+  // runner and the migrations are not part of the system either: pytest output names faults and scenarios.
   rule {
     source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
-    regex         = "fault-injector|experiment-runner"
+    regex         = "fault-injector|experiment-runner|tests|db-migrate"
     action        = "drop"
   }
 

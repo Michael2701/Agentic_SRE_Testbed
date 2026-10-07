@@ -1,3 +1,4 @@
+import atexit
 import importlib
 import logging
 
@@ -32,6 +33,7 @@ def setup_tracing(app: FastAPI, service: str, version: str = "1.0.0") -> None:
     )
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
+    atexit.register(provider.shutdown)  # flushes buffered spans on SIGTERM, e.g. a restart fault
 
     for module_name, class_name in _LIBRARY_INSTRUMENTORS:
         try:

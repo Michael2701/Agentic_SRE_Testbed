@@ -18,7 +18,7 @@ ingester:
 
 compactor:
   compaction:
-    block_retention: 24h
+    block_retention: 48h  # as Prometheus and Loki
 
 # Service graph + span metrics, remote-written to Prometheus (Grafana service map).
 metrics_generator:

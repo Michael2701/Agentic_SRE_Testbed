@@ -1,4 +1,11 @@
+# Port overrides etc. from .env (as compose reads it), exported to recipes and the host scripts.
+-include .env
+export
+
+SHELL := /bin/bash
+.SHELLFLAGS := -o pipefail -c  # a failing curl fails the recipe, even when piped into the pretty-printer
 COMPOSE := docker compose
+CURL := curl -sS --fail-with-body
 RATE ?= 5
 DURATION ?= 60
 FAULTS_URL := http://localhost:$${FAULT_INJECTOR_PORT:-8090}
@@ -19,7 +26,8 @@ down: ## Stop the environment
 	$(COMPOSE) down
 
 reset: ## Clean slate: revert faults, delete all state (DB, fault/experiment history, telemetry), start again
-	-@curl -s --max-time 120 -XDELETE $(FAULTS_URL)/faults > /dev/null
+	@$(CURL) --max-time 120 -XDELETE $(FAULTS_URL)/faults > /dev/null \
+		|| echo "warning: faults not reverted (environment down?); redeploys and edge config come back with the volumes"
 	$(COMPOSE) --profile test down -v --remove-orphans
 	$(MAKE) up
 	@python3 scripts/smoke.py
@@ -42,27 +50,27 @@ test-experiments: ## Run only the experiment tests (~3 min)
 test-challenges: ## Run only the M8 challenge scenario tests (~10 min)
 	$(COMPOSE) --profile test run --rm --build tests pytest -v -p no:cacheprovider experiments/test_challenges.py
 
-fault: ## Inject a fault: make fault TYPE=payment-latency PARAMS='{"latency_ms":2000}' [TARGET=payment] [EXP=exp-1]
+fault: ## Inject a fault: make fault TYPE=payment-latency [PARAMS='{"latency_ms":2500}'] [TARGET=payment] [EXP=exp-1]
 	@test -n "$(TYPE)" || { echo "TYPE is required, e.g. payment-latency, network-latency, bad-deployment (all types: README, Fault injection)"; exit 2; }
-	@curl -s -XPOST $(FAULTS_URL)/faults -H 'content-type: application/json' \
+	@$(CURL) -XPOST $(FAULTS_URL)/faults -H 'content-type: application/json' \
 		-d '{"type":"$(subst -,_,$(TYPE))","parameters":$(PARAMS)$(if $(TARGET),$(comma)"target":"$(TARGET)")$(if $(EXP),$(comma)"experiment_id":"$(EXP)")}' | $(PRETTY)
 
 faults: ## List active faults
-	@curl -s "$(FAULTS_URL)/faults?state=active" | $(PRETTY)
+	@$(CURL) "$(FAULTS_URL)/faults?state=active" | $(PRETTY)
 
 recover: ## Remove all active faults
-	@curl -s -XDELETE $(FAULTS_URL)/faults | $(PRETTY)
+	@$(CURL) -XDELETE $(FAULTS_URL)/faults | $(PRETTY)
 
 experiment: ## Run a scenario end to end and print the result: make experiment SCENARIO=payment-latency
 	@test -n "$(SCENARIO)" || { echo "SCENARIO is required (list: make scenarios)"; exit 2; }
-	@curl -s --max-time 1800 -XPOST "$(EXPERIMENTS_URL)/experiments?wait=true&format=text" \
+	@$(CURL) --max-time 1800 -XPOST "$(EXPERIMENTS_URL)/experiments?wait=true&format=text" \
 		-H 'content-type: application/json' -d '{"scenario":"$(SCENARIO)"}'
 
 experiments: ## List recorded experiments (with hidden ground truth)
-	@curl -s $(EXPERIMENTS_URL)/experiments | $(PRETTY)
+	@$(CURL) $(EXPERIMENTS_URL)/experiments | $(PRETTY)
 
 scenarios: ## List scenario files and whether they are valid
-	@curl -s "$(EXPERIMENTS_URL)/scenarios?format=text"
+	@$(CURL) "$(EXPERIMENTS_URL)/scenarios?format=text"
 
 load: ## Generate steady traffic: make load RATE=5 DURATION=60
 	$(COMPOSE) --profile test run --rm --build tests python load.py --rate $(RATE) --duration $(DURATION)
