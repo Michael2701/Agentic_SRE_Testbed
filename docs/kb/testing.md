@@ -64,6 +64,10 @@
   baseline and empties `baselines`).
 - `integration/test_happy_path.py` (6 tests): health/ready, login ok/bad, create order → read it back, orders
   without a token or with an invalid token → 401.
+- `integration/test_portal.py` (19 tests): every tool by path, Swagger under its prefix, prefixed Grafana/
+  Prometheus links, no portal logs in Loki; Control Center served with all assets and no external URLs;
+  `/fault-types` catalog. Browser flows (form inject/remove, experiment to verdict, log → trace) were checked
+  with headless Chrome (playwright-core), not part of `make test`. `make smoke` checks the portal too.
 - `test_observability.py` (10 tests): request ID generated/preserved, `/metrics` per service
   (hits `http://<svc>:8000` directly), counter deltas, Prometheus targets == expected job set and all
   up, one request_id in Loki for nginx+gateway+auth+order+payment, Grafana datasources healthy and 4

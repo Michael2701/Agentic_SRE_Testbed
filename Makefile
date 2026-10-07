@@ -10,17 +10,23 @@ RATE ?= 5
 DURATION ?= 60
 FAULTS_URL := http://localhost:$${FAULT_INJECTOR_PORT:-8090}
 EXPERIMENTS_URL := http://localhost:$${EXPERIMENT_RUNNER_PORT:-8091}
+PORTAL_URL := http://localhost:$${PORTAL_PORT:-8000}
 PARAMS ?= {}
 PRETTY := python3 -m json.tool
 comma := ,
 
-.PHONY: up down reset smoke acceptance test test-faults test-experiments test-challenges load fault faults recover experiment experiments scenarios logs ps
+.PHONY: up open down reset smoke acceptance test test-faults test-experiments test-challenges load fault faults recover experiment experiments scenarios logs ps
 
 up: ## Build and start the whole environment, wait until healthy
 	$(COMPOSE) up -d --build --wait
-	@echo "App:        http://localhost:$${NGINX_PORT:-8080}"
-	@echo "Grafana:    http://localhost:$${GRAFANA_PORT:-3000}"
-	@echo "Prometheus: http://localhost:$${PROMETHEUS_PORT:-9090}"
+	@echo "Control Center (everything): $(PORTAL_URL)    app for clients/curl: http://localhost:$${NGINX_PORT:-8080}"
+
+open: ## Open the Control Center (one UI for everything) in the browser
+	@case "$$(uname -s)" in \
+		Darwin) open "$(PORTAL_URL)" ;; \
+		MINGW*|MSYS*|CYGWIN*) start "" "$(PORTAL_URL)" ;; \
+		*) xdg-open "$(PORTAL_URL)" >/dev/null 2>&1 || wslview "$(PORTAL_URL)" 2>/dev/null || echo "open $(PORTAL_URL) in a browser" ;; \
+	esac
 
 down: ## Stop the environment
 	$(COMPOSE) down

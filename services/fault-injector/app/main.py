@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from app.catalog import FAULT_TYPES, check_target, conflict_key
+from app.catalog import CONFIG_SETTINGS, DEPENDENCY_ENV, FAULT_TYPES, check_target, conflict_key
 from app.config import settings
 from app.datastores import Postgres, Redis
 from app.docker_api import Docker
@@ -92,7 +92,25 @@ async def lifespan(app: FastAPI):
     await docker.aclose()
 
 
+class ForwardedPrefix:
+    """Behind the portal (http://localhost:8000/<prefix>/) the prefix is stripped and sent as X-Forwarded-Prefix;
+    as root_path it makes Swagger UI load its OpenAPI document (and "Try it out" call) under that prefix."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            prefix = dict(scope["headers"]).get(b"x-forwarded-prefix", b"").decode("latin-1")
+            if prefix.startswith("/") and prefix.isascii():
+                prefix = prefix.rstrip("/")  # ASGI: `path` includes `root_path` (routing strips it again)
+                scope = {**scope, "root_path": prefix, "path": prefix + scope["path"],
+                         "raw_path": prefix.encode() + scope.get("raw_path", scope["path"].encode())}
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="fault-injector", lifespan=lifespan)
+app.add_middleware(ForwardedPrefix)
 
 
 def validate(request: FaultRequest) -> tuple[str, dict]:
@@ -110,6 +128,18 @@ def validate(request: FaultRequest) -> tuple[str, dict]:
     if error:
         raise HTTPException(422, error)
     return target, params
+
+
+@app.get("/fault-types")
+async def fault_types() -> list[dict]:
+    """The catalog: targets and the parameter JSON schema (with defaults and limits) per type, for UIs.
+    `per_target` lists what `check_target` allows per target (config settings, dependencies)."""
+    per_target = {"bad_configuration": {t: sorted(keys) for t, keys in CONFIG_SETTINGS.items()},
+                  "incorrect_endpoint": {t: sorted(deps) for t, deps in DEPENDENCY_ENV.items()}}
+    return [{"type": name, "targets": sorted(fault_type.targets), "default_target": fault_type.default_target,
+             "mechanism": fault_type.mechanism, "parameters": fault_type.params.model_json_schema(),
+             "per_target": per_target.get(name)}
+            for name, fault_type in FAULT_TYPES.items()]
 
 
 @app.post("/faults/validate")
